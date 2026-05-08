@@ -1,75 +1,61 @@
 # quality-gc
 
-`quality-gc` installs deterministic guardrails and cleanup scans for TypeScript/JavaScript repositories.
+`quality-gc` adds practical guardrails for JavaScript and TypeScript repositories.
 
-It is designed for npm/pnpm projects that use GitHub Actions and GitHub Issues. The package provides the deterministic engine; optional Codex and Claude Code setup-agent prompts can orchestrate installation, but recurring checks never depend on AI.
+It is built for teams that use humans and coding agents in the same codebase. The setup can be helped by Codex or Claude Code, but the checks themselves are deterministic: CI does not depend on AI.
 
-## What Problem It Solves
+## What It Helps With
 
-Long-lived codebases collect drift. That drift is especially easy to introduce when multiple humans and agents edit the same repository over time.
+Codebases drift over time. This gets worse when coding agents make lots of changes quickly.
 
-Common examples:
+Common problems:
 
-- old workflows or docs still point to retired live paths;
-- architecture boundaries are documented but not enforced;
+- an agent imports from another module's internals because that was the fastest way to make code compile;
+- new code breaks the intended architecture, for example domain or app code starts depending on persistence or infrastructure code;
+- a new package, app, service, or module is added, but architecture rules are not updated;
 - new `any` types slowly bypass TypeScript safety;
-- local runtime artifacts such as `.tmp`, `tmp`, `logs`, or credential-shaped files accidentally become tracked;
-- cleanup work is noticed during review, then forgotten because it is not turned into a focused issue;
-- setup scripts overwrite local files or create broad, hard-to-review changes;
-- “cleanup bots” try to fix too much at once instead of creating narrow, reviewable work.
+- old workflows or docs keep pointing to removed paths;
+- local artifacts like `.tmp`, `tmp`, `logs`, or credential-shaped files accidentally get committed;
+- cleanup concerns are noticed in review, but never become clear follow-up work.
 
-`quality-gc` splits this into two deterministic paths:
+`quality-gc` turns those problems into either:
 
-- **Blocking guardrails**: cheap checks that must pass before a change is accepted.
-- **Cleanup Scan**: non-blocking drift detection that creates or updates targeted GitHub Issues.
+- blocking guardrails that should fail CI, or
+- cleanup findings that can become focused GitHub Issues.
 
-This keeps normal development protected without turning every cleanup signal into a failed CI run.
+## What Gets Installed
 
-## How It Works
+Setup adds:
 
-The package installs:
+- `.quality-gc/quality-gc.config.mjs`
+- `.quality-gc/no-new-any-baseline.json`
+- package scripts such as `quality:gc`, `quality:gc:architecture`, and `quality:gc:cleanup-scan:dry-run`
+- GitHub Actions workflows for architecture checks and cleanup scans
+- optional Codex or Claude Code setup skills
 
-- `.quality-gc/quality-gc.config.mjs` as the project-owned Quality GC config;
-- `.quality-gc/no-new-any-baseline.json` as the accepted explicit `any` baseline;
-- package scripts such as `quality:gc`, `quality:gc:architecture`, and `quality:gc:cleanup-scan:dry-run`;
-- GitHub Actions workflows for architecture checks and weekly Cleanup Scan;
-- optional local setup-agent skills for Codex or Claude Code.
-
-All mutating commands default to preview mode. Existing unmanaged files are not overwritten.
-
-When a repository has an `origin/HEAD`, apply mode refuses to write on the default branch unless `--allow-default-branch` is explicitly passed for a controlled fixture. Normal setup should happen on a branch and go through a PR.
+Mutating commands preview changes first. Apply mode refuses to overwrite unmanaged files and should normally run on a setup branch.
 
 ## Quick Start
 
-### 1. Install The Package And Skill
-
-Choose the setup-agent skill during package installation.
-
-For npm projects with Codex:
+### npm + Codex
 
 ```sh
 QUALITY_GC_INSTALL_SKILL=codex npm install -D quality-gc --foreground-scripts
 ```
 
-For npm projects with Claude Code:
+### npm + Claude Code
 
 ```sh
 QUALITY_GC_INSTALL_SKILL=claude-code npm install -D quality-gc --foreground-scripts
 ```
 
-For both:
-
-```sh
-QUALITY_GC_INSTALL_SKILL=both npm install -D quality-gc --foreground-scripts
-```
-
-For pnpm workspaces with Codex:
+### pnpm workspace + Codex
 
 ```sh
 QUALITY_GC_INSTALL_SKILL=codex pnpm add -D -w quality-gc
 ```
 
-For pnpm workspaces with Claude Code:
+### pnpm workspace + Claude Code
 
 ```sh
 QUALITY_GC_INSTALL_SKILL=claude-code pnpm add -D -w quality-gc
@@ -79,94 +65,69 @@ To skip skill installation:
 
 ```sh
 QUALITY_GC_INSTALL_SKILL=skip npm install -D quality-gc
-QUALITY_GC_INSTALL_SKILL=skip pnpm add -D -w quality-gc
-```
-
-You can also omit `QUALITY_GC_INSTALL_SKILL` and let the package ask interactively, but some package managers hide lifecycle prompts. The environment variable is the reliable path.
-
-Do not use `npm install` inside a pnpm workspace with an existing pnpm-managed `node_modules`; use `pnpm add -D -w quality-gc` instead.
-
-### 2. Run The Setup Agent
-
-In Codex, call:
-
-```text
-$quality-gc-setup-agent
-```
-
-Ask it to install Quality GC for the repository:
-
-```text
-Install Quality GC production-ready for this repo. Start with preview mode and do not write files until I approve.
-```
-
-The expected flow is:
-
-1. The agent inspects the repository.
-2. The agent runs preview commands through `npx quality-gc` or `pnpm exec quality-gc`.
-3. You review the plan.
-4. You approve apply.
-5. The agent creates a setup branch.
-6. The agent applies setup, runs checks, commits, pushes, and opens a PR.
-7. After merge, you approve a live Cleanup Scan issue-write proof.
-
-The setup agent should explain progress in user-facing language. A good preview message should say what it checked, what Quality GC will add, what has not been changed yet, and the exact approval phrase to continue. It should not ask users to understand internal details such as package caches, working trees, or raw CLI output.
-
-### Manual Skill Install Fallback
-
-Use this only if you installed with `QUALITY_GC_INSTALL_SKILL=skip` or your package manager disabled lifecycle scripts.
-
-For Codex:
-
-```sh
-npx quality-gc install-skill --target codex --scope project --root . --apply
-```
-
-For Claude Code:
-
-```sh
-npx quality-gc install-skill --target claude-code --scope project --root . --apply
-```
-
-With pnpm, replace `npx quality-gc` with `pnpm exec quality-gc`.
-
-## Manual Setup Without An Agent
-
-You can run the same flow directly.
-
-### Preview
-
-```sh
-npx quality-gc setup --root .
 ```
 
 For pnpm:
 
 ```sh
-pnpm exec quality-gc setup --root .
+QUALITY_GC_INSTALL_SKILL=skip pnpm add -D -w quality-gc
 ```
 
-This prints the files and package scripts that would be created or updated. It should not write files.
+## Recommended Setup With An Agent
 
-### Apply On A Setup Branch
+In Codex, run:
+
+```text
+$quality-gc-setup-agent
+```
+
+Ask:
+
+```text
+Install Quality GC production-ready for this repo. Start with preview mode and do not write files until I approve.
+```
+
+The agent should:
+
+1. inspect the repo;
+2. preview the setup;
+3. analyze the codebase and draft architecture boundaries;
+4. show you the plan;
+5. wait for approval;
+6. apply changes on a setup branch;
+7. run checks;
+8. open a PR.
+
+The agent should not invent architecture rules blindly. It should detect the project shape first: single package, monorepo, frontend app, backend service, fullstack app, library, CLI package, or custom layout.
+
+## Manual Setup
+
+Preview:
+
+```sh
+npx quality-gc setup --root .
+```
+
+Apply on a branch:
 
 ```sh
 git checkout -b codex/quality-gc-setup
 npx quality-gc setup --root . --apply
 ```
 
-For pnpm:
+For pnpm, use:
 
 ```sh
-git checkout -b codex/quality-gc-setup
+pnpm exec quality-gc setup --root .
 pnpm exec quality-gc setup --root . --apply
 ```
 
-### Run Local Checks
+After setup, run:
 
 ```sh
 npm run quality:gc
 npm run quality:gc:architecture
+npm run quality:gc:architecture-drift
 npm run quality:gc:cleanup-scan:dry-run
 ```
 
@@ -175,25 +136,36 @@ For pnpm:
 ```sh
 pnpm run quality:gc
 pnpm run quality:gc:architecture
+pnpm run quality:gc:architecture-drift
 pnpm run quality:gc:cleanup-scan:dry-run
 ```
 
-### Commit And Open A PR
+## Architecture Rules
 
-```sh
-git add .
-git commit -m "chore: install quality gc"
-git push -u origin codex/quality-gc-setup
-gh pr create --fill --draft
-```
+Architecture rules are project-specific. The default config starts empty because `quality-gc` cannot safely guess your intended architecture without inspecting the repo.
 
-Merge the PR only after the generated checks pass and the generated files look correct.
+The setup agent can generate an initial architecture config by looking at:
 
-## GitHub Issue Setup
+- package or workspace roots;
+- apps, services, packages, and modules;
+- public entrypoints;
+- existing import direction;
+- frontend/backend/shared splits;
+- runtime-only and pure type/contract areas.
 
-Cleanup Scan issues use stable labels and stable body markers so later scans can update existing issues instead of creating duplicates.
+When new modules or packages are added, the config may need a refresh.
 
-Create the labels before the first live issue write:
+`quality-gc architecture-drift` checks for source roots that are not covered by the current architecture config. It is advisory by default: it warns that the config may need updating, but it does not rewrite the config automatically.
+
+The weekly cleanup scan can also create a GitHub Issue for architecture config drift.
+
+Technical rule format is documented in [`docs/architecture-boundaries.md`](docs/architecture-boundaries.md).
+
+## Cleanup Scan Issues
+
+Cleanup Scan can create or update GitHub Issues for non-blocking cleanup work.
+
+Create labels before the first live issue write:
 
 ```sh
 npx quality-gc labels --repo owner/repo
@@ -207,17 +179,16 @@ pnpm exec quality-gc labels --repo owner/repo
 pnpm exec quality-gc labels --repo owner/repo --apply
 ```
 
-Minimum labels:
+Labels used by Quality GC:
 
 - `quality-gc`
 - `cleanup`
 - `quality-gc:candidate-rule`
+- `quality-gc:architecture-drift`
 - `quality-gc:tracked-artifact`
 - `quality-gc:promotion`
 
-## Live Cleanup Scan Proof
-
-After the setup PR is merged into the default branch, dispatch the generated workflow with live writes enabled:
+After the setup PR is merged, you can run the generated cleanup workflow with live issue writes enabled:
 
 ```sh
 gh workflow run quality-gc-cleanup-scan.yml \
@@ -226,61 +197,30 @@ gh workflow run quality-gc-cleanup-scan.yml \
   -f dry_run=false
 ```
 
-Then verify:
-
-```sh
-gh run list --repo owner/repo --workflow quality-gc-cleanup-scan.yml --limit 5
-gh issue list --repo owner/repo --label quality-gc --state open
-```
-
-The issue body should include a marker like:
-
-```html
-<!-- quality-gc-cleanup:tracked-artifact-tmp-log -->
-```
-
-Scheduled Cleanup Scans use GitHub Actions `GITHUB_TOKEN` with scoped permissions. Local `gh` credentials are for setup orchestration only.
-
-## Publishing
-
-This repository publishes to npm from GitHub Actions on pushes to `main`.
-
-Required repository secret:
-
-- `NPM_TOKEN` - an npm access token allowed to publish the `quality-gc` package.
-
-Publish behavior:
-
-- CI runs typecheck, tests, audit, and `npm pack --dry-run` first.
-- The publish job reads the package name and version from `package.json`.
-- If `NPM_TOKEN` is not configured, publish is skipped with a workflow warning.
-- If that exact version already exists on npm, publish is skipped.
-- If the version does not exist on npm, GitHub Actions runs `npm publish --access public`.
-- The same workflow can also be run manually from GitHub Actions; manual runs use the same "publish only if this version is new" check.
-
-To release a new package version, bump `package.json` and `package-lock.json`, commit to `main`, and push. Documentation-only or workflow-only pushes with an already-published version will not republish.
+Scheduled cleanup scans use the GitHub Actions `GITHUB_TOKEN` with scoped permissions.
 
 ## Commands
 
-- `quality-gc setup` previews generated config, scripts, docs, and workflows. Add `--apply` to write approved changes from a setup branch.
-- `quality-gc run` runs blocking guardrails only.
-- `quality-gc architecture` runs architecture boundary rules.
-- `quality-gc architecture-drift` checks whether architecture boundaries may need a refresh after project structure changes.
-- `quality-gc cleanup-scan` generates non-blocking cleanup findings and issue plans.
-- `quality-gc labels --repo owner/name` previews or creates the minimum Quality GC labels for setup-time issue writes.
-- `quality-gc migrate` previews managed upgrades for existing installations.
-- `quality-gc install-skill --target codex|claude-code` installs or previews setup-agent prompts.
+- `quality-gc setup` previews or applies config, scripts, docs, and workflows.
+- `quality-gc run` runs blocking guardrails.
+- `quality-gc architecture` runs configured architecture rules.
+- `quality-gc architecture-drift` checks whether architecture rules may need a refresh.
+- `quality-gc cleanup-scan` finds cleanup work and plans GitHub Issue updates.
+- `quality-gc labels --repo owner/repo` previews or creates labels.
+- `quality-gc migrate` updates an existing installation.
+- `quality-gc install-skill --target codex|claude-code` installs setup-agent skills.
 
-## Safety Model
+## Safety
 
 `quality-gc` intentionally does not:
 
-- embed AI inside recurring checks;
+- run AI inside recurring CI checks;
+- auto-rewrite architecture rules in CI;
 - write directly to the default branch during normal setup;
-- preserve discovered architecture violations as permanent allowlists;
+- keep permanent allowlists for discovered architecture violations;
 - read or print secret file contents;
 - use broad GitHub permissions;
 - use local `gh` as the scheduled issue writer;
-- overwrite unmanaged user files without stopping.
+- overwrite unmanaged files without stopping.
 
-The setup agent may help orchestrate installation, but the installed checks remain deterministic and reviewable.
+The goal is simple: keep guardrails deterministic, keep cleanup work focused, and keep architecture decisions reviewable.
