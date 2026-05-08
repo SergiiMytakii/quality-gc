@@ -10,7 +10,7 @@ export interface CleanupEvidence {
 export interface CleanupFinding {
   key: string;
   title: string;
-  category: 'candidate-rule' | 'promotion' | 'tracked-artifact';
+  category: 'architecture-drift' | 'candidate-rule' | 'promotion' | 'tracked-artifact';
   severity: 'low' | 'medium' | 'high';
   scope: string;
   suggestedVerification: string;

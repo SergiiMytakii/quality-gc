@@ -31,7 +31,9 @@ export function issueLabels(finding: CleanupFinding): string[] {
       ? 'quality-gc:promotion'
       : finding.category === 'tracked-artifact'
         ? 'quality-gc:tracked-artifact'
-        : 'quality-gc:candidate-rule';
+        : finding.category === 'architecture-drift'
+          ? 'quality-gc:architecture-drift'
+          : 'quality-gc:candidate-rule';
   return ['quality-gc', 'cleanup', categoryLabel];
 }
 

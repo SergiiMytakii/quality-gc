@@ -2,6 +2,7 @@
 import process from 'node:process';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { runArchitectureDriftCommand } from './commands/architecture-drift.js';
 import { runArchitectureCommand } from './commands/architecture.js';
 import { runCleanupScanCommand } from './commands/cleanup-scan.js';
 import { runInstallSkillCommand } from './commands/install-skill.js';
@@ -74,6 +75,7 @@ Commands:
   setup --root <path> [--apply] [--package-source <source>] [--allow-default-branch]
   run --root <path>
   architecture --root <path>
+  architecture-drift --root <path> [--fail-on-findings]
   cleanup-scan --root <path> [--output <file>] [--existing-issues-file <file>] [--repo owner/name] [--write-issues]
   labels --repo owner/name [--apply]
   install-skill --target codex|claude-code [--scope user|project] [--root <path>] [--home <path>] [--apply]
@@ -103,6 +105,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return runGuardrailsCommand({ root: root(args), json });
     case 'architecture':
       return runArchitectureCommand({ root: root(args), json });
+    case 'architecture-drift':
+      return runArchitectureDriftCommand({
+        root: root(args),
+        json,
+        failOnFindings: bool(args, 'fail-on-findings'),
+      });
     case 'cleanup-scan':
       return runCleanupScanCommand({
         root: root(args),

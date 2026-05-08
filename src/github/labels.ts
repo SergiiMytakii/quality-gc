@@ -12,6 +12,7 @@ const LABEL_METADATA: Record<string, { color: string; description: string }> = {
   'quality-gc': { color: '5319e7', description: 'Quality GC generated issue' },
   cleanup: { color: 'fbca04', description: 'Cleanup work' },
   'quality-gc:candidate-rule': { color: 'd4c5f9', description: 'Quality GC candidate guardrail cleanup' },
+  'quality-gc:architecture-drift': { color: 'bfdadc', description: 'Quality GC architecture config refresh' },
   'quality-gc:tracked-artifact': { color: 'fef2c0', description: 'Quality GC tracked local artifact cleanup' },
   'quality-gc:promotion': { color: '0e8a16', description: 'Quality GC guardrail promotion' },
 };

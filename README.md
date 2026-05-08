@@ -265,6 +265,7 @@ To release a new package version, bump `package.json` and `package-lock.json`, c
 - `quality-gc setup` previews generated config, scripts, docs, and workflows. Add `--apply` to write approved changes from a setup branch.
 - `quality-gc run` runs blocking guardrails only.
 - `quality-gc architecture` runs architecture boundary rules.
+- `quality-gc architecture-drift` checks whether architecture boundaries may need a refresh after project structure changes.
 - `quality-gc cleanup-scan` generates non-blocking cleanup findings and issue plans.
 - `quality-gc labels --repo owner/name` previews or creates the minimum Quality GC labels for setup-time issue writes.
 - `quality-gc migrate` previews managed upgrades for existing installations.

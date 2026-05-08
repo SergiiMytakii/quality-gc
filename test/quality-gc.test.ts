@@ -6,6 +6,7 @@ import { loadConfig, validateConfig } from '../src/config/load.js';
 import { defaultConfig, PACKAGE_VERSION, renderConfig } from '../src/config/schema.js';
 import { main } from '../src/cli.js';
 import { collectCleanupFindings } from '../src/commands/cleanup-scan.js';
+import { runArchitectureDriftCommand } from '../src/commands/architecture-drift.js';
 import { runGuardrailsCommand } from '../src/commands/run.js';
 import { evaluateArchitecture } from '../src/guards/architecture.js';
 import { issueMarker, planIssueActions } from '../src/github/issues.js';
@@ -168,6 +169,7 @@ describe('setup and migrate safety', () => {
     expect(architecture?.content).toContain('run_install: false');
     expect(architecture?.content).toContain('run: pnpm install --frozen-lockfile');
     expect(architecture?.content).toContain('run: pnpm run quality:gc:architecture');
+    expect(architecture?.content).toContain('run: pnpm run quality:gc:architecture-drift');
     expect(architecture?.content).not.toContain('npm ci');
     expect(architecture?.content.indexOf('uses: pnpm/action-setup@v4')).toBeLessThan(
       architecture?.content.indexOf('uses: actions/setup-node@v4') ?? -1,
@@ -220,6 +222,15 @@ describe('setup and migrate safety', () => {
       'apps/frontend/src/index.tsx': 1,
       'services/worker/src/index.ts': 1,
     });
+  });
+
+  it('adds architecture drift scripts during setup', () => {
+    const root = createNpmRepo();
+    const plan = createSetupPlan(root);
+    const packageChange = plan.changes.find(change => change.path === 'package.json');
+    const packageJson = JSON.parse(packageChange?.content ?? '{}') as { scripts: Record<string, string> };
+
+    expect(packageJson.scripts['quality:gc:architecture-drift']).toBe('quality-gc architecture-drift --root .');
   });
 
   it('refuses unmanaged generated files', () => {
@@ -390,6 +401,210 @@ describe('guardrail adoption model', () => {
     ]);
   });
 
+  it('detects architecture layer violations from application and domain code into persistence', () => {
+    const root = createNpmRepo();
+    writeText(
+      path.join(root, 'src/render-snapshot/domain/render-snapshot.entity.ts'),
+      [
+        "import type { RenderSnapshotRecord } from '../persistence/render-snapshot.record';",
+        'export interface RenderSnapshot {',
+        '  record?: RenderSnapshotRecord;',
+        '}',
+      ].join('\n'),
+    );
+    writeText(
+      path.join(root, 'src/render-snapshot/persistence/render-snapshot.record.ts'),
+      'export interface RenderSnapshotRecord { id: string; }\n',
+    );
+    const config = defaultConfig();
+    config.rules.architecture.layerBoundaries = [
+      {
+        id: 'render-snapshot',
+        layers: [
+          {
+            id: 'domain',
+            paths: ['src/render-snapshot/domain', 'src/render-snapshot/application'],
+          },
+          {
+            id: 'persistence',
+            paths: ['src/render-snapshot/persistence'],
+          },
+        ],
+        rules: [
+          {
+            from: 'domain',
+            disallow: ['persistence'],
+            message: 'application/domain must not import persistence',
+          },
+        ],
+      },
+    ];
+
+    expect(evaluateArchitecture(root, config)).toEqual([
+      expect.objectContaining({
+        rule: 'architecture:layer-boundary:render-snapshot',
+        path: 'src/render-snapshot/domain/render-snapshot.entity.ts',
+        line: 1,
+        detail: 'application/domain must not import persistence',
+      }),
+    ]);
+  });
+
+  it('detects architecture path, external import, and syntax boundaries', () => {
+    const root = createNpmRepo();
+    writeText(
+      path.join(root, 'src/frontend/page.tsx'),
+      [
+        "import { schema } from '../shared/schemas/user.schema';",
+        "import mongoose from 'mongoose';",
+        'export const env = process.env.NODE_ENV;',
+        'export const value = schema + mongoose.version + env;',
+      ].join('\n'),
+    );
+    writeText(path.join(root, 'src/shared/schemas/user.schema.ts'), 'export const schema = "user";\n');
+    const config = defaultConfig();
+    config.rules.architecture.pathImportBoundaries = [
+      {
+        id: 'frontend-no-schemas',
+        fromPaths: ['src/frontend'],
+        targetPaths: ['src/shared/schemas'],
+        message: 'frontend must not import shared schemas',
+      },
+    ];
+    config.rules.architecture.externalImportBoundaries = [
+      {
+        id: 'frontend-no-mongoose',
+        sourcePaths: ['src/frontend'],
+        forbiddenImportSpecifiers: ['mongoose'],
+        message: 'frontend must not import mongoose',
+      },
+    ];
+    config.rules.architecture.syntaxBoundaries = [
+      {
+        id: 'frontend-no-process-env',
+        sourcePaths: ['src/frontend'],
+        forbiddenSyntax: ['process.env'],
+        message: 'frontend must not read process.env',
+      },
+    ];
+
+    expect(evaluateArchitecture(root, config)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rule: 'architecture:path-import-boundary:frontend-no-schemas',
+          path: 'src/frontend/page.tsx',
+          line: 1,
+          detail: 'frontend must not import shared schemas',
+        }),
+        expect.objectContaining({
+          rule: 'architecture:external-import-boundary:frontend-no-mongoose',
+          path: 'src/frontend/page.tsx',
+          line: 2,
+          detail: 'frontend must not import mongoose',
+        }),
+        expect.objectContaining({
+          rule: 'architecture:syntax-boundary:frontend-no-process-env',
+          path: 'src/frontend/page.tsx',
+          line: 3,
+          detail: 'frontend must not read process.env',
+        }),
+      ]),
+    );
+  });
+
+  it('detects service-root internals and domain public-entrypoint violations', () => {
+    const root = createNpmRepo();
+    writeText(
+      path.join(root, 'src/api/page.ts'),
+      [
+        "import { internalSearch } from 'search-service/internal/search';",
+        "import { ownedInternal } from '../billing/internal/owned';",
+        'export const value = internalSearch + ownedInternal;',
+      ].join('\n'),
+    );
+    writeText(path.join(root, 'src/search/internal/search.ts'), 'export const internalSearch = "search";\n');
+    writeText(path.join(root, 'src/billing/index.ts'), 'export const billing = "public";\n');
+    writeText(path.join(root, 'src/billing/internal/owned.ts'), 'export const ownedInternal = "billing";\n');
+    const config = defaultConfig();
+    config.rules.architecture.serviceRoots = [
+      { id: 'api', path: 'src/api', packageName: 'api-service' },
+      { id: 'search', path: 'src/search', packageName: 'search-service' },
+      { id: 'billing', path: 'src/billing', packageName: 'billing-service', public: true },
+    ];
+    config.rules.architecture.domains = [
+      {
+        id: 'billing',
+        root: 'src/billing',
+        publicEntryPoints: ['src/billing/index.ts'],
+        message: 'billing internals must stay behind the public entrypoint',
+      },
+    ];
+
+    expect(evaluateArchitecture(root, config)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rule: 'architecture:service-root-boundary',
+          path: 'src/api/page.ts',
+          line: 1,
+          detail: 'api must not import search internals directly',
+        }),
+        expect.objectContaining({
+          rule: 'architecture:domain-public-entrypoint:billing',
+          path: 'src/api/page.ts',
+          line: 2,
+          detail: 'billing internals must stay behind the public entrypoint',
+        }),
+      ]),
+    );
+  });
+
+  it('validates architecture boundary config shape', () => {
+    const config = defaultConfig();
+    config.rules.architecture.serviceRoots = [{ id: 'api', path: 'src/api', packageName: 'api-service' }];
+    config.rules.architecture.domains = [{ id: 'api', root: 'src/api', publicEntryPoints: ['src/api/index.ts'] }];
+    config.rules.architecture.pathImportBoundaries = [
+      { id: 'api-no-db', fromPaths: ['src/api/domain'], targetPaths: ['src/api/db'] },
+    ];
+    config.rules.architecture.externalImportBoundaries = [
+      { id: 'domain-no-mongoose', sourcePaths: ['src/api/domain'], forbiddenImportSpecifiers: ['mongoose'] },
+    ];
+    config.rules.architecture.syntaxBoundaries = [
+      { id: 'domain-no-env', sourcePaths: ['src/api/domain'], forbiddenSyntax: ['process.env'] },
+    ];
+    config.rules.architecture.layerBoundaries = [
+      {
+        id: 'api',
+        layers: [
+          { id: 'domain', paths: ['src/api/domain'] },
+          { id: 'persistence', paths: ['src/api/persistence'] },
+        ],
+        rules: [{ from: 'domain', disallow: ['persistence'] }],
+      },
+    ];
+
+    expect(validateConfig(config)).toBe(config);
+  });
+
+  it('rejects invalid architecture boundary configs', () => {
+    const invalidLayerConfig = defaultConfig();
+    invalidLayerConfig.rules.architecture.layerBoundaries = [
+      {
+        id: 'api',
+        layers: [{ id: 'domain', paths: ['src/api/domain'] }],
+        rules: [{ from: 'domain', disallow: ['persistence'] }],
+      },
+    ];
+
+    expect(() => validateConfig(invalidLayerConfig)).toThrow(/unknown disallowed layer persistence/);
+
+    const invalidSyntaxConfig = defaultConfig();
+    invalidSyntaxConfig.rules.architecture.syntaxBoundaries = [
+      { id: 'domain-no-debugger', sourcePaths: ['src/api/domain'], forbiddenSyntax: ['debugger'] },
+    ];
+
+    expect(() => validateConfig(invalidSyntaxConfig)).toThrow(/unsupported forbidden syntax debugger/);
+  });
+
   it('keeps candidate violations advisory for quality-gc run', async () => {
     const root = createNpmRepo();
     const config = defaultConfig();
@@ -429,6 +644,75 @@ describe('guardrail adoption model', () => {
     const findings = await collectCleanupFindings(root);
 
     expect(findings.some(finding => finding.key === 'promote-stale-live-path')).toBe(false);
+  });
+
+  it('creates architecture drift findings for uncovered source modules', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.noNewAny.status = 'disabled';
+    config.rules.staleLivePath.status = 'disabled';
+    config.rules.architecture.layerBoundaries = [
+      {
+        id: 'billing',
+        layers: [{ id: 'domain', paths: ['src/billing/domain'] }],
+        rules: [],
+      },
+    ];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+    writeText(path.join(root, 'src/billing/domain/model.ts'), 'export const billing = "covered";\n');
+    writeText(path.join(root, 'src/reports/domain/model.ts'), 'export const reports = "uncovered";\n');
+
+    const findings = await collectCleanupFindings(root);
+    const drift = findings.find(finding => finding.key === 'architecture-config-drift');
+
+    expect(drift).toMatchObject({
+      category: 'architecture-drift',
+      title: 'Refresh architecture boundary config',
+      deterministicAutofixSafe: false,
+    });
+    expect(drift?.evidence).toEqual([
+      expect.objectContaining({
+        path: 'src/reports',
+        detail: 'source-module is not covered by current architecture boundary config',
+      }),
+    ]);
+  });
+
+  it('does not create architecture drift findings for covered source modules', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.noNewAny.status = 'disabled';
+    config.rules.staleLivePath.status = 'disabled';
+    config.rules.architecture.layerBoundaries = [
+      {
+        id: 'billing',
+        layers: [{ id: 'domain', paths: ['src/billing/domain'] }],
+        rules: [],
+      },
+    ];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+    writeText(path.join(root, 'src/billing/domain/model.ts'), 'export const billing = "covered";\n');
+
+    const findings = await collectCleanupFindings(root);
+
+    expect(findings.some(finding => finding.key === 'architecture-config-drift')).toBe(false);
+  });
+
+  it('runs architecture drift command as advisory by default', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.architecture.layerBoundaries = [
+      {
+        id: 'billing',
+        layers: [{ id: 'domain', paths: ['src/billing/domain'] }],
+        rules: [],
+      },
+    ];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+    writeText(path.join(root, 'src/reports/domain/model.ts'), 'export const reports = "uncovered";\n');
+
+    await expect(runArchitectureDriftCommand({ root, json: true, failOnFindings: false })).resolves.toBe(0);
+    await expect(runArchitectureDriftCommand({ root, json: true, failOnFindings: true })).resolves.toBe(1);
   });
 });
 
@@ -475,6 +759,7 @@ describe('cleanup issue lifecycle', () => {
     expect(actions.filter(action => action.action === 'create').map(action => action.name)).toEqual([
       'quality-gc',
       'quality-gc:candidate-rule',
+      'quality-gc:architecture-drift',
       'quality-gc:tracked-artifact',
       'quality-gc:promotion',
     ]);
@@ -521,7 +806,36 @@ describe('workflow and skill installer contracts', () => {
     applySkillInstallPlan(claudePlan);
 
     expect(readText(codexPlan.files[0].destination)).toContain('quality-gc');
+    expect(readText(codexPlan.files[1].destination)).toContain('Architecture Boundary Synthesis');
     expect(readText(claudePlan.files[0].destination)).toContain('quality-gc');
+    expect(readText(claudePlan.files[2].destination)).toContain('Architecture Boundary Synthesis');
+  });
+
+  it('instructs setup agents to synthesize architecture boundaries from code evidence', () => {
+    const root = createNpmRepo();
+    const home = tempDir('quality-gc-home-');
+    const codexPlan = createSkillInstallPlan({ target: 'codex', scope: 'user', root, home });
+    const claudePlan = createSkillInstallPlan({ target: 'claude-code', scope: 'project', root, home });
+
+    applySkillInstallPlan(codexPlan);
+    applySkillInstallPlan(claudePlan);
+
+    expect(readText(codexPlan.files[0].destination)).toContain(
+      'Do not leave architecture boundaries empty just because the CLI default is empty.',
+    );
+    expect(readText(codexPlan.files[0].destination)).toContain('classify the project shape from local evidence');
+    expect(readText(codexPlan.files[0].destination)).toContain('references/architecture-boundary-synthesis.md');
+    expect(readText(codexPlan.files[1].destination)).toContain('Classify the project shape before choosing rule types.');
+    expect(readText(codexPlan.files[1].destination)).toContain('Run the architecture command against the draft config.');
+    expect(readText(codexPlan.files[1].destination)).toContain('architecture-config-drift');
+    expect(readText(claudePlan.files[0].destination)).toContain(
+      'Do not leave architecture boundaries empty just because the CLI default is empty.',
+    );
+    expect(readText(claudePlan.files[0].destination)).toContain('classify the project shape from local evidence');
+    expect(readText(claudePlan.files[0].destination)).toContain('quality-gc-architecture-boundaries.md');
+    expect(readText(claudePlan.files[2].destination)).toContain('Classify the project shape before choosing rule types.');
+    expect(readText(claudePlan.files[2].destination)).toContain('Run the architecture command against the draft config.');
+    expect(readText(claudePlan.files[2].destination)).toContain('architecture-config-drift');
   });
 
   it('installs Codex project-scoped skills into the target repository', () => {

@@ -78,11 +78,29 @@ export function createSkillInstallPlan(options: {
         : process.env.CODEX_HOME ?? path.join(home, '.codex');
     const source = path.join(pkgRoot, 'skills', 'codex', 'SKILL.md');
     const destination = path.join(codexHome, 'skills', 'quality-gc-setup-agent', 'SKILL.md');
+    const referenceSource = path.join(pkgRoot, 'skills', 'references', 'architecture-boundary-synthesis.md');
+    const referenceDestination = path.join(
+      codexHome,
+      'skills',
+      'quality-gc-setup-agent',
+      'references',
+      'architecture-boundary-synthesis.md',
+    );
     return {
       target: options.target,
       scope: options.scope,
-      files: [planSkillFile(source, destination, fileExists(path.dirname(path.dirname(destination))) || options.scope === 'project')],
-      fallbackInstructions: [`Create ${path.dirname(destination)} and copy skills/codex/SKILL.md to ${destination}.`],
+      files: [
+        planSkillFile(source, destination, fileExists(path.dirname(path.dirname(destination))) || options.scope === 'project'),
+        planSkillFile(
+          referenceSource,
+          referenceDestination,
+          fileExists(path.dirname(path.dirname(destination))) || options.scope === 'project',
+        ),
+      ],
+      fallbackInstructions: [
+        `Create ${path.dirname(destination)} and copy skills/codex/SKILL.md to ${destination}.`,
+        `Create ${path.dirname(referenceDestination)} and copy skills/references/architecture-boundary-synthesis.md to ${referenceDestination}.`,
+      ],
     };
   }
 
@@ -104,10 +122,16 @@ export function createSkillInstallPlan(options: {
         path.join(base, 'commands', 'quality-gc-setup.md'),
         fileExists(base) || options.scope === 'project',
       ),
+      planSkillFile(
+        path.join(pkgRoot, 'skills', 'references', 'architecture-boundary-synthesis.md'),
+        path.join(base, 'agents', 'quality-gc-architecture-boundaries.md'),
+        fileExists(base) || options.scope === 'project',
+      ),
     ],
     fallbackInstructions: [
       `Create ${path.join(base, 'agents')} and copy skills/claude-code/agents/quality-gc-setup-agent.md.`,
       `Create ${path.join(base, 'commands')} and copy skills/claude-code/commands/quality-gc-setup.md.`,
+      `Create ${path.join(base, 'agents')} and copy skills/references/architecture-boundary-synthesis.md.`,
     ],
   };
 }

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { loadConfig } from '../config/load.js';
 import { evaluateRules } from '../guards/rules.js';
+import { collectArchitectureDriftFindings } from '../cleanup/architecture-drift.js';
 import { candidateFindings, type CleanupFinding } from '../cleanup/findings.js';
 import { listTrackedLocalArtifactFindings } from '../cleanup/local-artifacts.js';
 import { loadExistingIssues, planIssueActions, writeIssueActions, type ExistingIssue } from '../github/issues.js';
@@ -27,6 +28,7 @@ export async function collectCleanupFindings(root: string): Promise<CleanupFindi
   const config = await loadConfig(root);
   const ruleResults = evaluateRules(root, config, { includeCandidates: true });
   return [
+    ...collectArchitectureDriftFindings(root, config),
     ...candidateFindings(ruleResults),
     ...listTrackedLocalArtifactFindings(root, config.cleanupScan.trackedLocalArtifactRoots),
   ];

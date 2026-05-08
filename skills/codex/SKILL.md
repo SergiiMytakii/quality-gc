@@ -26,10 +26,25 @@ Workflow:
    - npm: `npx quality-gc cleanup-scan --root . --dry-run --json`
    - pnpm: `pnpm exec quality-gc setup --root . --json`
    - pnpm: `pnpm exec quality-gc cleanup-scan --root . --dry-run --json`
-3. Present the plan/diff and ask for approval before any writes.
-4. After approval, create a dedicated setup branch, run setup with `--apply` through the package-manager runner, install the selected skill, run local checks, commit, push, and open a PR.
-5. Run `quality-gc labels --repo <owner/name>` through the package-manager runner first, then run it with `--apply` after approval to create missing Quality GC labels before live issue write.
-6. Prove live Cleanup Scan issue writes through the installed GitHub Actions workflow with its scoped `GITHUB_TOKEN`; do not use local `gh` as the scheduled issue writer.
+3. Analyze the codebase and draft project-specific architecture boundaries before presenting the final plan. Do not leave architecture boundaries empty just because the CLI default is empty.
+4. Present the plan/diff, including the proposed architecture config, and ask for approval before any writes.
+5. After approval, create a dedicated setup branch, run setup with `--apply` through the package-manager runner, install the selected skill, write or update the project-specific architecture config, run local checks, commit, push, and open a PR.
+6. Run `quality-gc labels --repo <owner/name>` through the package-manager runner first, then run it with `--apply` after approval to create missing Quality GC labels before live issue write.
+7. Prove live Cleanup Scan issue writes through the installed GitHub Actions workflow with its scoped `GITHUB_TOKEN`; do not use local `gh` as the scheduled issue writer.
+
+Architecture boundary synthesis:
+
+- Before drafting architecture config, read `references/architecture-boundary-synthesis.md` from this installed skill. Use it as the template and validation checklist.
+- Also use this workflow when the user asks to refresh architecture boundaries or when Cleanup Scan reports `architecture-config-drift`.
+- Treat architecture config as part of setup, not as a manual follow-up. The agent must classify the project shape from local evidence before deciding what to write.
+- Support single-package repositories, monorepos/workspaces, libraries, CLI/tooling packages, frontend apps, backend services, fullstack apps, and custom layouts. Do not force a repository into domain/application/infrastructure or any other specific architecture.
+- Look for durable ownership signals such as package roots, public entrypoints, repeated folders, runtime/pure splits, import aliases, and existing import direction. Common layer names are examples only, not required structure.
+- Prefer high-confidence rules that reflect the repository's existing ownership model. Apply common patterns only when the target codebase has evidence for them.
+- Use `rules.architecture.serviceRoots` and `domains` for package/service ownership and public entrypoints, `layerBoundaries` for intra-module layer direction, `pathImportBoundaries` for concrete path-to-path bans, `externalImportBoundaries` for forbidden packages, and `syntaxBoundaries` for checks such as `process.env` in pure layers.
+- Existing violations are not a reason to omit a rule or add a permanent allowlist. If the rule represents the intended architecture, configure it and report the current violations as work to fix.
+- After changing architecture config, run the package-manager script for `quality:gc:architecture` and `quality:gc:architecture-drift`.
+- Empty architecture boundaries are acceptable only when the repository genuinely has no stable source layout to infer from. If so, state the exact evidence, for example `I found only src/index.ts and no repeatable layers or package roots.`
+- If confidence is partial, propose a narrow initial rule and label it as candidate in the user-facing explanation; do not invent broad service boundaries without path evidence.
 
 Communication contract:
 
@@ -39,8 +54,8 @@ Communication contract:
 - If there are zero findings, still report exactly what was checked and what was not configured. `0 findings` is not enough.
 - Always summarize in this shape:
   1. `What I checked` - package manager, installed `quality-gc` version, GitHub repo, and secret handling.
-  2. `What Quality GC actually covers` - include the exact no-new-any source roots, baseline explicit-any count, architecture boundary count, cleanup artifact roots, and cleanup findings count by category.
-  3. `What is not covered or needs a decision` - say when architecture boundaries are empty, when no-new-any scans no files, when cleanup only checks tracked artifacts, or when live issue-write cannot be proven before merge.
+  2. `What Quality GC actually covers` - include the exact no-new-any source roots, baseline explicit-any count, generated architecture boundary count by type, cleanup artifact roots, and cleanup findings count by category.
+  3. `What is not covered or needs a decision` - say when architecture boundaries could not be inferred from code evidence, when no-new-any scans no files, when cleanup only checks tracked artifacts, or when live issue-write cannot be proven before merge.
   4. `What apply will change` - list exact file/workflow/label/config effects. If the effect is only metadata, say so plainly.
   5. `Next step` - one explicit approval sentence, or say no apply is needed if there is nothing useful to write.
 - If package installation is needed, say plainly: `The quality-gc package is not installed in this project yet. I will add it as a dev dependency with <npm|pnpm>, then show the setup preview.`
@@ -56,15 +71,15 @@ The project uses a pnpm workspace, quality-gc 0.1.4 is installed, and the GitHub
 
 What Quality GC actually covers
 - no-new-any scans apps/**/*.{ts,tsx} and packages/**/*.{ts,tsx}; the current explicit-any baseline is 0.
-- architecture check is enabled, but boundaries are 0, so it runs but cannot find architecture violations until rules are configured.
+- architecture check is enabled with 4 generated rules: 2 layer boundaries, 1 path import boundary, and 1 external import boundary. It currently reports 3 violations that need code fixes.
 - cleanup scan checks git-tracked files in .tmp, tmp, logs, and output; findings: 0.
 
 What is not covered or needs a decision
-- Architecture boundaries must be configured from the real project architecture; frontend/backend/shared restrictions cannot be guessed safely.
+- The generated architecture rules cover the stable layers I found. I did not add service-root rules because this repo has only one source package.
 - Untracked local tmp files are not violations unless they are committed to git.
 
 What apply will change
-- It will create or update the .quality-gc config, baseline, package scripts, and GitHub workflows.
+- It will create or update the .quality-gc config with the generated architecture rules, baseline, package scripts, and GitHub workflows.
 - If the preview only shows installedVersion, guardrail behavior will not change; that is a metadata update and can be skipped.
 
 Next step

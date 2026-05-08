@@ -11,6 +11,7 @@ interface PackageJson {
 export const QUALITY_GC_SCRIPTS: Record<string, string> = {
   'quality:gc': 'quality-gc run --root .',
   'quality:gc:architecture': 'quality-gc architecture --root .',
+  'quality:gc:architecture-drift': 'quality-gc architecture-drift --root .',
   'quality:gc:cleanup-scan:dry-run': 'quality-gc cleanup-scan --root . --dry-run',
   'quality:gc:cleanup-scan:write': 'quality-gc cleanup-scan --root . --write-issues',
   'quality:gc:migrate': 'quality-gc migrate --root .',

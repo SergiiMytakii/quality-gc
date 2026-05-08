@@ -25,6 +25,62 @@ export interface ArchitectureBoundary {
   message?: string;
 }
 
+export interface ArchitectureServiceRoot {
+  id: string;
+  path: string;
+  packageName?: string;
+  public?: boolean;
+}
+
+export interface ArchitectureDomainBoundary {
+  id?: string;
+  root: string;
+  publicEntryPoints?: string[];
+  internalConsumerRoots?: string[];
+  message?: string;
+}
+
+export interface ArchitecturePathImportBoundary {
+  id?: string;
+  fromPaths: string[];
+  targetPaths: string[];
+  message?: string;
+}
+
+export interface ArchitectureLayer {
+  id: string;
+  paths: string[];
+}
+
+export interface ArchitectureLayerRule {
+  from: string;
+  disallow: string[];
+  message?: string;
+}
+
+export interface ArchitectureLayerBoundary {
+  id?: string;
+  layers: ArchitectureLayer[];
+  rules: ArchitectureLayerRule[];
+}
+
+export interface ArchitectureExternalImportBoundary {
+  id?: string;
+  sourcePaths: string[];
+  exceptPaths?: string[];
+  forbiddenImportSpecifiers: string[];
+  message?: string;
+}
+
+export interface ArchitectureSyntaxBoundary {
+  id?: string;
+  sourcePaths: string[];
+  exceptPaths?: string[];
+  forbiddenSyntax: string[];
+  includeTests?: boolean;
+  message?: string;
+}
+
 export interface QualityGcConfig {
   schemaVersion: 1;
   installedVersion: string;
@@ -32,6 +88,12 @@ export interface QualityGcConfig {
     architecture: {
       status: RuleStatus;
       boundaries: ArchitectureBoundary[];
+      serviceRoots?: ArchitectureServiceRoot[];
+      domains?: ArchitectureDomainBoundary[];
+      pathImportBoundaries?: ArchitecturePathImportBoundary[];
+      layerBoundaries?: ArchitectureLayerBoundary[];
+      externalImportBoundaries?: ArchitectureExternalImportBoundary[];
+      syntaxBoundaries?: ArchitectureSyntaxBoundary[];
     };
     noNewAny: {
       status: RuleStatus;
@@ -54,6 +116,7 @@ export const QUALITY_GC_LABELS = [
   'quality-gc',
   'cleanup',
   'quality-gc:candidate-rule',
+  'quality-gc:architecture-drift',
   'quality-gc:tracked-artifact',
   'quality-gc:promotion',
 ] as const;

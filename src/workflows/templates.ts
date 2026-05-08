@@ -61,6 +61,9 @@ ${runtime.packageManagerSetupStep}
 
       - name: Run Quality GC architecture
         run: ${runtime.runCommand('quality:gc:architecture')}
+
+      - name: Check architecture config coverage drift
+        run: ${runtime.runCommand('quality:gc:architecture-drift')}
 `;
 }
 
@@ -120,7 +123,7 @@ Quality GC runs deterministic repository guardrails and non-blocking cleanup sca
 
 Architecture runs as a blocking workflow on pull requests and pushes. Cleanup Scan runs weekly from the default branch and can also be dispatched manually. Manual dispatch defaults to dry-run; issue writes happen only on schedule or when manual dispatch sets \`dry_run=false\`.
 
-This installation detected ${packageManager} for GitHub Actions dependency installation. Local scripts use \`${runPrefix} quality:gc\`, \`${runPrefix} quality:gc:architecture\`, and \`${runPrefix} quality:gc:cleanup-scan:dry-run\`.
+This installation detected ${packageManager} for GitHub Actions dependency installation. Local scripts use \`${runPrefix} quality:gc\`, \`${runPrefix} quality:gc:architecture\`, \`${runPrefix} quality:gc:architecture-drift\`, and \`${runPrefix} quality:gc:cleanup-scan:dry-run\`.
 
 Recurring checks do not use AI. Setup-agent prompts only orchestrate preview, apply, PR creation, workflow dispatch, and verification.
 `;

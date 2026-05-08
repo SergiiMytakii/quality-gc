@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "scripts/postinstall.cjs",
     "skills",
     "README.md",
