@@ -71,7 +71,7 @@ function createConfigForRoot(root: string): ReturnType<typeof defaultConfig> {
 }
 
 function detectTypeScriptSourceIncludes(root: string): string[] {
-  const ignoredTopLevelDirs = new Set([
+  const ignoredDirs = new Set([
     'build',
     'coverage',
     'dist',
@@ -85,15 +85,16 @@ function detectTypeScriptSourceIncludes(root: string): string[] {
 
   for (const filePath of listFiles(root, { extensions: ['.ts', '.tsx'] })) {
     const relativePath = relativePosix(root, filePath);
-    const [topLevelDir] = relativePath.split('/');
-    if (!topLevelDir || topLevelDir.startsWith('.') || ignoredTopLevelDirs.has(topLevelDir)) {
+    const pathParts = relativePath.split('/');
+    const [topLevelDir] = pathParts;
+    if (!topLevelDir || topLevelDir.startsWith('.') || pathParts.some(part => ignoredDirs.has(part))) {
       continue;
     }
     if (relativePath === topLevelDir) {
       hasRootSourceFile = true;
       continue;
     }
-    sourceRoots.add(topLevelDir);
+    sourceRoots.add(detectOwningSourceRoot(root, relativePath));
   }
 
   const includes = [...sourceRoots].sort().map(sourceRoot => `${sourceRoot}/**/*.{ts,tsx}`);
@@ -102,6 +103,17 @@ function detectTypeScriptSourceIncludes(root: string): string[] {
   }
 
   return includes.length > 0 ? includes : [...DEFAULT_NO_NEW_ANY_INCLUDE];
+}
+
+function detectOwningSourceRoot(root: string, relativeFilePath: string): string {
+  const parts = relativeFilePath.split('/');
+  for (let depth = parts.length - 1; depth > 0; depth -= 1) {
+    const candidate = parts.slice(0, depth).join('/');
+    if (fileExists(path.join(root, candidate, 'package.json'))) {
+      return candidate;
+    }
+  }
+  return parts[0];
 }
 
 export function createSetupPlan(root: string, options: { packageSource?: string } = {}): SetupPlan {

@@ -192,6 +192,35 @@ describe('setup and migrate safety', () => {
     expect(baseline.files).toEqual({ 'apps/web/src/index.ts': 1 });
   });
 
+  it('detects service-level TypeScript roots in package-based monorepos', () => {
+    const root = createNpmRepoWithoutSource();
+    writeText(path.join(root, 'apps/frontend/package.json'), '{"name":"frontend"}\n');
+    writeText(path.join(root, 'apps/frontend/src/index.tsx'), 'export const value: any = "frontend";\n');
+    writeText(path.join(root, 'apps/backend/package.json'), '{"name":"backend"}\n');
+    writeText(path.join(root, 'apps/backend/src/index.ts'), 'export const value: string = "backend";\n');
+    writeText(path.join(root, 'services/worker/package.json'), '{"name":"worker"}\n');
+    writeText(path.join(root, 'services/worker/src/index.ts'), 'export const value: any = "worker";\n');
+    writeText(path.join(root, 'packages/shared/package.json'), '{"name":"shared"}\n');
+    writeText(path.join(root, 'packages/shared/src/index.ts'), 'export const value: string = "shared";\n');
+
+    const plan = createSetupPlan(root);
+    const configChange = plan.changes.find(change => change.path === '.quality-gc/quality-gc.config.mjs');
+    const baselineChange = plan.changes.find(change => change.path === '.quality-gc/no-new-any-baseline.json');
+    const configText = configChange?.content ?? '';
+    const baseline = JSON.parse(baselineChange?.content ?? '{}') as { files: Record<string, number> };
+
+    expect(configText).toContain('"apps/backend/**/*.{ts,tsx}"');
+    expect(configText).toContain('"apps/frontend/**/*.{ts,tsx}"');
+    expect(configText).toContain('"packages/shared/**/*.{ts,tsx}"');
+    expect(configText).toContain('"services/worker/**/*.{ts,tsx}"');
+    expect(configText).not.toContain('"apps/**/*.{ts,tsx}"');
+    expect(configText).not.toContain('"services/**/*.{ts,tsx}"');
+    expect(baseline.files).toEqual({
+      'apps/frontend/src/index.tsx': 1,
+      'services/worker/src/index.ts': 1,
+    });
+  });
+
   it('refuses unmanaged generated files', () => {
     const root = createNpmRepo();
     writeText(path.join(root, 'docs/quality-gc.md'), '# local docs\n');
