@@ -10,6 +10,7 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-gc-smoke-'));
 const fixtureRoot = path.join(tempRoot, 'fixture');
 const packRoot = path.join(tempRoot, 'pack');
 const keepTemp = process.env.SMOKE_KEEP_TMP === '1' || process.env.SMOKE_KEEP_TMP === 'true';
+const architectureRefreshCommand = process.env.SMOKE_ARCHITECTURE_REFRESH_CMD;
 const logDir = path.join(repoRoot, '.tmp', 'smoke-live');
 const logPath = path.join(logDir, 'latest.md');
 
@@ -108,7 +109,15 @@ function npmPackageSource(packageJson) {
   return spec;
 }
 
-function updateArchitectureConfigForDriftScenario(configPath) {
+function applyContractArchitectureRefresh(configPath) {
+  const referencePath = path.join(
+    fixtureRoot,
+    '.codex/skills/quality-gc-setup-agent/references/architecture-boundary-synthesis.md',
+  );
+  const reference = readText(referencePath);
+  assert(reference.includes('Classify the project shape before choosing rule types.'), 'installed reference contains project-shape classification rule');
+  assert(reference.includes('Refresh Triggers'), 'installed reference documents architecture refresh triggers');
+
   const config = readText(configPath);
   const replacement = [
     '      "boundaries": [],',
@@ -132,6 +141,30 @@ function updateArchitectureConfigForDriftScenario(configPath) {
 
   assert(config.includes('      "boundaries": []'), 'generated config contains the architecture boundaries anchor');
   writeText(configPath, config.replace('      "boundaries": []', replacement));
+  appendLog([
+    '## Contract architecture refresh',
+    '',
+    'No `SMOKE_ARCHITECTURE_REFRESH_CMD` was provided, so the smoke used the installed synthesis reference to apply the expected architecture-refresh output shape locally.',
+  ]);
+}
+
+function refreshArchitectureConfig(configPath) {
+  if (architectureRefreshCommand) {
+    run(process.env.SHELL ?? 'sh', ['-lc', architectureRefreshCommand], {
+      cwd: fixtureRoot,
+      title: 'Run external architecture refresh command',
+      env: {
+        QUALITY_GC_SMOKE_FIXTURE_ROOT: fixtureRoot,
+        QUALITY_GC_SMOKE_CONFIG_PATH: configPath,
+      },
+    });
+  } else {
+    applyContractArchitectureRefresh(configPath);
+  }
+
+  const refreshedConfig = readText(configPath);
+  assert(refreshedConfig.includes('"layerBoundaries"'), 'architecture refresh wrote layer boundaries into config');
+  assert(refreshedConfig.includes('src/billing/domain'), 'architecture refresh covered the billing domain source root');
 }
 
 function main() {
@@ -211,13 +244,25 @@ function main() {
   assert(guardFailure.stdout.includes('no-new-any'), 'guardrail failure includes no-new-any');
   fs.rmSync(path.join(fixtureRoot, 'src/new-any.ts'));
 
-  updateArchitectureConfigForDriftScenario(path.join(fixtureRoot, '.quality-gc/quality-gc.config.mjs'));
   writeText(
     path.join(fixtureRoot, 'src/billing/domain/render-snapshot.entity.ts'),
     "import type { BillingRecord } from '../persistence/billing.record';\nexport interface BillingSnapshot { record?: BillingRecord; }\n",
   );
   writeText(path.join(fixtureRoot, 'src/billing/persistence/billing.record.ts'), 'export interface BillingRecord { id: string; }\n');
-  writeText(path.join(fixtureRoot, 'src/reports/domain/report.ts'), 'export const report = "uncovered";\n');
+
+  const initialDrift = run('npx', ['quality-gc', 'architecture-drift', '--root', '.', '--json'], {
+    cwd: fixtureRoot,
+    title: 'Architecture drift detects module that needs refresh',
+  });
+  const initialDriftPayload = parseJsonCommandResult(initialDrift, 'initial architecture drift');
+  assert(
+    initialDriftPayload.findings.some(finding =>
+      finding.evidence.some(item => item.path === 'src/billing' || item.path.startsWith('src/billing/')),
+    ),
+    'architecture-drift detects billing module before refresh',
+  );
+
+  refreshArchitectureConfig(path.join(fixtureRoot, '.quality-gc/quality-gc.config.mjs'));
 
   const architectureFailure = run('npx', ['quality-gc', 'architecture', '--root', '.'], {
     cwd: fixtureRoot,
@@ -227,9 +272,18 @@ function main() {
   assert(architectureFailure.status !== 0, 'architecture guard fails for configured domain-to-persistence import');
   assert(architectureFailure.stdout.includes('billing domain must not import persistence directly'), 'architecture violation uses configured message');
 
+  const refreshedDrift = run('npx', ['quality-gc', 'architecture-drift', '--root', '.', '--json'], {
+    cwd: fixtureRoot,
+    title: 'Architecture drift is clear after refresh',
+  });
+  const refreshedDriftPayload = parseJsonCommandResult(refreshedDrift, 'refreshed architecture drift');
+  assert(refreshedDriftPayload.findings.length === 0, 'architecture refresh clears drift for current fixture modules');
+
+  writeText(path.join(fixtureRoot, 'src/reports/domain/report.ts'), 'export const report = "uncovered";\n');
+
   const drift = run('npx', ['quality-gc', 'architecture-drift', '--root', '.', '--json'], {
     cwd: fixtureRoot,
-    title: 'Architecture drift reports uncovered source module',
+    title: 'Architecture drift reports newly added source module',
   });
   const driftPayload = parseJsonCommandResult(drift, 'architecture drift');
   assert(driftPayload.findings.some(finding => finding.key === 'architecture-config-drift'), 'architecture-drift reports config drift');
