@@ -1,0 +1,42 @@
+{
+  "name": "quality-gc",
+  "version": "0.1.0",
+  "description": "Deterministic Quality GC guardrails and setup-agent installers for npm/GitHub repositories.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "quality-gc": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SergiiMytakii/quality-gc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SergiiMytakii/quality-gc/issues"
+  },
+  "homepage": "https://github.com/SergiiMytakii/quality-gc#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.5"
+  }
+}
