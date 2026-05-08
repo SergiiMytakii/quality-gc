@@ -16,6 +16,15 @@ export const QUALITY_GC_SCRIPTS: Record<string, string> = {
   'quality:gc:migrate': 'quality-gc migrate --root .',
 };
 
+function isNpmVersionSource(spec: string): boolean {
+  const trimmed = spec.trim();
+  if (trimmed === '*' || trimmed === 'latest') {
+    return true;
+  }
+
+  return /^[~^]?\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(trimmed);
+}
+
 function fileSpecPath(root: string, spec: string): string | null {
   if (!spec.startsWith('file:')) {
     return null;
@@ -28,7 +37,7 @@ function fileSpecPath(root: string, spec: string): string | null {
 export function planPackageJsonUpdate(
   root: string,
   packageSource: string,
-  options: { allowDependencyUpdate?: boolean } = {},
+  options: { allowDependencyUpdate?: boolean; allowNpmVersionUpdate?: boolean } = {},
 ): PlannedTextFile {
   const relativePath = 'package.json';
   const fullPath = path.join(root, relativePath);
@@ -58,8 +67,19 @@ export function planPackageJsonUpdate(
     existingDependency &&
     fileSpecPath(root, existingDependency) !== null &&
     fileSpecPath(root, existingDependency) === fileSpecPath(root, packageSource);
+  const safeNpmVersionUpdate =
+    Boolean(options.allowNpmVersionUpdate) &&
+    existingDependency !== undefined &&
+    isNpmVersionSource(existingDependency) &&
+    isNpmVersionSource(packageSource);
 
-  if (existingDependency && existingDependency !== packageSource && !equivalentFileSource && !options.allowDependencyUpdate) {
+  if (
+    existingDependency &&
+    existingDependency !== packageSource &&
+    !equivalentFileSource &&
+    !safeNpmVersionUpdate &&
+    !options.allowDependencyUpdate
+  ) {
     conflicts.push(`devDependency quality-gc is ${existingDependency}, not ${packageSource}`);
   } else if (existingDependency && equivalentFileSource) {
     next.devDependencies!['quality-gc'] = existingDependency;

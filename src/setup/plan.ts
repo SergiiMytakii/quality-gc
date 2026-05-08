@@ -47,7 +47,7 @@ export function createSetupPlan(root: string, options: { packageSource?: string 
   const changes: PlannedTextFile[] = [
     planOwnedTextFile(root, CONFIG_FILE, renderConfig(config), 'create Quality GC source-of-truth config'),
     planOwnedTextFile(root, NO_NEW_ANY_BASELINE_FILE, `${JSON.stringify(baseline, null, 2)}\n`, 'create accepted no-new-any baseline'),
-    planPackageJsonUpdate(root, packageSource),
+    planPackageJsonUpdate(root, packageSource, { allowNpmVersionUpdate: true }),
     planManagedTextFile(root, '.github/workflows/quality-gc-architecture.yml', architectureWorkflow(packageManager), {
       key: 'workflow:architecture',
       syntax: 'yaml',

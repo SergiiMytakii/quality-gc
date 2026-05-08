@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { validateConfig } from '../src/config/load.js';
-import { defaultConfig, renderConfig } from '../src/config/schema.js';
+import { defaultConfig, PACKAGE_VERSION, renderConfig } from '../src/config/schema.js';
 import { main } from '../src/cli.js';
 import { collectCleanupFindings } from '../src/commands/cleanup-scan.js';
 import { runGuardrailsCommand } from '../src/commands/run.js';
@@ -92,6 +92,57 @@ describe('setup and migrate safety', () => {
     expect(packageJson.scripts['quality:gc']).toBe('quality-gc run --root .');
   });
 
+  it('updates an already installed npm quality-gc version during setup', () => {
+    const root = createNpmRepo();
+    const packageJsonPath = path.join(root, 'package.json');
+    const packageJson = readJson<Record<string, unknown>>(packageJsonPath);
+    writeText(
+      packageJsonPath,
+      `${JSON.stringify(
+        {
+          ...packageJson,
+          devDependencies: {
+            'quality-gc': '^0.1.1',
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const targetSource = `^${PACKAGE_VERSION}`;
+    const plan = createSetupPlan(root, { packageSource: targetSource });
+    const packageChange = plan.changes.find(change => change.path === 'package.json');
+
+    expect(packageChange?.action).toBe('update');
+    expect(packageChange?.reason).not.toContain(`not ${targetSource}`);
+    expect(JSON.parse(packageChange?.content ?? '{}').devDependencies['quality-gc']).toBe(targetSource);
+  });
+
+  it('does not replace a custom quality-gc package source during setup', () => {
+    const root = createNpmRepo();
+    const packageJsonPath = path.join(root, 'package.json');
+    const packageJson = readJson<Record<string, unknown>>(packageJsonPath);
+    writeText(
+      packageJsonPath,
+      `${JSON.stringify(
+        {
+          ...packageJson,
+          devDependencies: {
+            'quality-gc': 'github:SergiiMytakii/quality-gc#main',
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const plan = createSetupPlan(root, { packageSource: `^${PACKAGE_VERSION}` });
+    const packageChange = plan.changes.find(change => change.path === 'package.json');
+
+    expect(packageChange?.action).toBe('conflict');
+  });
+
   it('generates pnpm GitHub workflows for pnpm repositories', () => {
     const root = createPnpmRepo();
     const plan = createSetupPlan(root);
@@ -132,15 +183,15 @@ describe('setup and migrate safety', () => {
     applySetupPlan(createSetupPlan(root, { packageSource: '^0.0.1' }));
     writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(defaultConfig('0.0.1')));
 
-    const plan = await createMigrationPlan(root, { packageSource: '^0.1.0' });
+    const plan = await createMigrationPlan(root, { packageSource: `^${PACKAGE_VERSION}` });
     expect(plan.changes.every(change => change.action !== 'conflict')).toBe(true);
 
     applySetupPlan(plan);
     const packageJson = readJson<{ devDependencies: Record<string, string> }>(path.join(root, 'package.json'));
     const configText = readText(path.join(root, '.quality-gc/quality-gc.config.mjs'));
 
-    expect(packageJson.devDependencies['quality-gc']).toBe('^0.1.0');
-    expect(configText).toContain('"installedVersion": "0.1.0"');
+    expect(packageJson.devDependencies['quality-gc']).toBe(`^${PACKAGE_VERSION}`);
+    expect(configText).toContain(`"installedVersion": "${PACKAGE_VERSION}"`);
   });
 });
 

@@ -1,4 +1,10 @@
-export const PACKAGE_VERSION = '0.1.0';
+import fs from 'node:fs';
+
+const packageJson = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
+
+export const PACKAGE_VERSION = packageJson.version;
 export const CONFIG_FILE = '.quality-gc/quality-gc.config.mjs';
 export const NO_NEW_ANY_BASELINE_FILE = '.quality-gc/no-new-any-baseline.json';
 
