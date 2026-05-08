@@ -193,6 +193,8 @@ The setup agent can generate an initial architecture config by looking at:
 
 When new modules or packages are added, the config may need a refresh.
 
+Architecture entries can be `blocking` or `candidate`. Blocking entries fail CI when they find violations. Candidate entries are for existing architecture debt: they do not fail CI, but Cleanup Scan can create GitHub Issues for the current violations.
+
 `quality-gc architecture-drift` checks for source roots that are not covered by the current architecture config. It is advisory by default: it warns that the config may need updating, but it does not rewrite the config automatically.
 
 The weekly cleanup scan can also create a GitHub Issue for architecture config drift.

@@ -6,6 +6,12 @@ The CLI default config keeps architecture rules empty because each repository ha
 
 Architecture rules live under `rules.architecture` in `.quality-gc/quality-gc.config.mjs`.
 
+`rules.architecture.status` is the default status for architecture rules. Individual architecture entries may override it with `status: 'blocking'`, `status: 'candidate'`, or `status: 'disabled'`.
+
+- `blocking` rules fail `quality-gc run` and the architecture workflow when they have violations.
+- `candidate` rules do not fail blocking checks. Cleanup Scan turns their current violations into GitHub Issues, so existing architecture debt can be tracked without breaking CI.
+- `disabled` rules are ignored.
+
 ## Supported Rule Types
 
 `boundaries` is the legacy path-to-path rule format:
@@ -55,6 +61,7 @@ layerBoundaries: [
     ],
     rules: [
       {
+        status: 'candidate',
         from: 'domain',
         disallow: ['persistence'],
         message: 'Application/domain code must not import persistence directly.',
@@ -126,7 +133,7 @@ Then it should choose only the rule types that fit the observed structure:
 - public module entrypoints such as `index.ts`, `*.module.ts`, or documented facade services;
 - existing imports that already show intended direction and current violations.
 
-Existing violations are not a reason to omit a rule. If the rule represents the intended architecture, configure it and report the current violations as follow-up work.
+Existing violations are not a reason to omit a rule. If the rule represents the intended architecture but the current code violates it, configure it as `candidate`. Cleanup Scan will create or update an issue for that debt. Promote it to `blocking` after violations reach zero.
 
 Empty architecture rules are acceptable only when the repository has no stable ownership boundary to infer from, for example a package with only `src/index.ts` and no repeatable layers, public entrypoints, package roots, or runtime/pure split.
 

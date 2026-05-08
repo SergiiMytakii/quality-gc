@@ -1,13 +1,16 @@
 import path from 'node:path';
 import ts from 'typescript';
 import { listFiles, readText, relativePosix, toPosixPath } from '../util/fs.js';
-import type { Violation } from '../util/result.js';
+import type { RuleEvaluation, Violation } from '../util/result.js';
 import type {
   ArchitectureBoundary,
   ArchitectureDomainBoundary,
   ArchitectureLayerBoundary,
+  ArchitectureLayerRule,
+  ArchitectureRuleStatus,
   ArchitectureServiceRoot,
   QualityGcConfig,
+  RuleStatus,
 } from '../config/schema.js';
 
 interface ImportReference {
@@ -218,8 +221,52 @@ function boundaryRuleName(kind: string, id: string | undefined): string {
   return id ? `architecture:${kind}:${id}` : 'architecture';
 }
 
-export function evaluateArchitecture(root: string, config: QualityGcConfig): Violation[] {
-  const violations: Violation[] = [];
+function layerRuleName(boundary: ArchitectureLayerBoundary, layerRule: ArchitectureLayerRule): string {
+  const base = boundaryRuleName('layer-boundary', boundary.id);
+  if (boundary.rules.length <= 1) {
+    return base;
+  }
+  return `${base}:${layerRule.from}-to-${layerRule.disallow.join('-')}`;
+}
+
+function effectiveArchitectureStatus(globalStatus: RuleStatus, entry?: ArchitectureRuleStatus, parent?: ArchitectureRuleStatus): RuleStatus {
+  if (globalStatus === 'disabled') {
+    return 'disabled';
+  }
+  return entry?.status ?? parent?.status ?? globalStatus;
+}
+
+function addArchitectureViolation(
+  evaluations: Map<string, RuleEvaluation>,
+  status: RuleStatus,
+  rule: string,
+  violation: Violation,
+): void {
+  if (status === 'disabled') {
+    return;
+  }
+  const key = `${status}:${rule}`;
+  const evaluation = evaluations.get(key) ?? { rule, status, violations: [] };
+  evaluation.violations.push(violation);
+  evaluations.set(key, evaluation);
+}
+
+function ensureArchitectureEvaluation(evaluations: Map<string, RuleEvaluation>, status: RuleStatus, rule: string): void {
+  if (status === 'disabled') {
+    return;
+  }
+  const key = `${status}:${rule}`;
+  if (!evaluations.has(key)) {
+    evaluations.set(key, { rule, status, violations: [] });
+  }
+}
+
+export function evaluateArchitectureRules(
+  root: string,
+  config: QualityGcConfig,
+  options: { includeCandidates: boolean } = { includeCandidates: true },
+): RuleEvaluation[] {
+  const evaluations = new Map<string, RuleEvaluation>();
   const architecture = config.rules.architecture;
   const boundaries = architecture.boundaries;
   const serviceRoots = (architecture.serviceRoots ?? []).map(serviceRoot => ({
@@ -237,6 +284,58 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
   const externalImportBoundaries = architecture.externalImportBoundaries ?? [];
   const syntaxBoundaries = architecture.syntaxBoundaries ?? [];
 
+  for (const boundary of boundaries) {
+    const status = effectiveArchitectureStatus(architecture.status, boundary);
+    if (status === 'candidate' && !options.includeCandidates) {
+      continue;
+    }
+    ensureArchitectureEvaluation(evaluations, status, boundaryRuleName('boundary', undefined));
+  }
+  for (const serviceRoot of serviceRoots) {
+    const status = effectiveArchitectureStatus(architecture.status, serviceRoot);
+    if (status === 'candidate' && !options.includeCandidates) {
+      continue;
+    }
+    ensureArchitectureEvaluation(evaluations, status, 'architecture:service-root-boundary');
+  }
+  for (const domain of domains) {
+    const status = effectiveArchitectureStatus(architecture.status, domain);
+    if (status === 'candidate' && !options.includeCandidates) {
+      continue;
+    }
+    ensureArchitectureEvaluation(evaluations, status, boundaryRuleName('domain-public-entrypoint', domain.id));
+  }
+  for (const boundary of pathImportBoundaries) {
+    const status = effectiveArchitectureStatus(architecture.status, boundary);
+    if (status === 'candidate' && !options.includeCandidates) {
+      continue;
+    }
+    ensureArchitectureEvaluation(evaluations, status, boundaryRuleName('path-import-boundary', boundary.id));
+  }
+  for (const boundary of externalImportBoundaries) {
+    const status = effectiveArchitectureStatus(architecture.status, boundary);
+    if (status === 'candidate' && !options.includeCandidates) {
+      continue;
+    }
+    ensureArchitectureEvaluation(evaluations, status, boundaryRuleName('external-import-boundary', boundary.id));
+  }
+  for (const boundary of syntaxBoundaries) {
+    const status = effectiveArchitectureStatus(architecture.status, boundary);
+    if (status === 'candidate' && !options.includeCandidates) {
+      continue;
+    }
+    ensureArchitectureEvaluation(evaluations, status, boundaryRuleName('syntax-boundary', boundary.id));
+  }
+  for (const boundary of layerBoundaries) {
+    for (const layerRule of boundary.rules) {
+      const status = effectiveArchitectureStatus(architecture.status, layerRule, boundary);
+      if (status === 'candidate' && !options.includeCandidates) {
+        continue;
+      }
+      ensureArchitectureEvaluation(evaluations, status, layerRuleName(boundary, layerRule));
+    }
+  }
+
   for (const filePath of listFiles(root, { extensions: SOURCE_EXTENSIONS, includeHidden: false })) {
     const relativePath = relativePosix(root, filePath);
     const content = readText(filePath);
@@ -253,8 +352,13 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
 
       for (const syntaxReference of references.syntax) {
         if (boundary.forbiddenSyntax.includes(syntaxReference.token)) {
-          violations.push({
-            rule: boundaryRuleName('syntax-boundary', boundary.id),
+          const rule = boundaryRuleName('syntax-boundary', boundary.id);
+          const status = effectiveArchitectureStatus(architecture.status, boundary);
+          if (status === 'candidate' && !options.includeCandidates) {
+            continue;
+          }
+          addArchitectureViolation(evaluations, status, rule, {
+            rule,
             path: relativePath,
             line: syntaxReference.line,
             detail: boundary.message ?? `${syntaxReference.token} violates architecture boundary`,
@@ -271,8 +375,13 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
           violatesBoundary(relativePath, imported, boundary) ||
           violatesBoundary(relativePath, resolvedReference.rawImported, boundary)
         ) {
-          violations.push({
-            rule: 'architecture',
+          const rule = boundaryRuleName('boundary', undefined);
+          const status = effectiveArchitectureStatus(architecture.status, boundary);
+          if (status === 'candidate' && !options.includeCandidates) {
+            continue;
+          }
+          addArchitectureViolation(evaluations, status, rule, {
+            rule,
             path: relativePath,
             line: resolvedReference.line,
             detail: boundary.message ?? `import from ${imported} violates architecture boundary`,
@@ -283,12 +392,16 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
       const fromService = findServiceOwner(serviceRoots, relativePath);
       const toService = findServiceOwner(serviceRoots, imported);
       if (fromService && toService && fromService.id !== toService.id && toService.public !== true) {
-        violations.push({
-          rule: 'architecture:service-root-boundary',
-          path: relativePath,
-          line: resolvedReference.line,
-          detail: `${fromService.id} must not import ${toService.id} internals directly`,
-        });
+        const rule = 'architecture:service-root-boundary';
+        const status = effectiveArchitectureStatus(architecture.status, toService);
+        if (!(status === 'candidate' && !options.includeCandidates)) {
+          addArchitectureViolation(evaluations, status, rule, {
+            rule,
+            path: relativePath,
+            line: resolvedReference.line,
+            detail: `${fromService.id} must not import ${toService.id} internals directly`,
+          });
+        }
       }
 
       for (const domain of domains) {
@@ -301,8 +414,13 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
           toInsideDomain &&
           !isDomainPublicEntryPoint(domain, imported, resolvedReference.rawImported)
         ) {
-          violations.push({
-            rule: boundaryRuleName('domain-public-entrypoint', domain.id),
+          const rule = boundaryRuleName('domain-public-entrypoint', domain.id);
+          const status = effectiveArchitectureStatus(architecture.status, domain);
+          if (status === 'candidate' && !options.includeCandidates) {
+            continue;
+          }
+          addArchitectureViolation(evaluations, status, rule, {
+            rule,
             path: relativePath,
             line: resolvedReference.line,
             detail: domain.message ?? `import from ${imported} violates domain public entrypoint`,
@@ -316,8 +434,13 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
           !matchesPrefix(relativePath, boundary.exceptPaths ?? []) &&
           boundary.forbiddenImportSpecifiers.some(forbidden => matchesImportSpecifier(resolvedReference.specifier, forbidden))
         ) {
-          violations.push({
-            rule: boundaryRuleName('external-import-boundary', boundary.id),
+          const rule = boundaryRuleName('external-import-boundary', boundary.id);
+          const status = effectiveArchitectureStatus(architecture.status, boundary);
+          if (status === 'candidate' && !options.includeCandidates) {
+            continue;
+          }
+          addArchitectureViolation(evaluations, status, rule, {
+            rule,
             path: relativePath,
             line: resolvedReference.line,
             detail: boundary.message ?? `import from ${resolvedReference.specifier} violates architecture boundary`,
@@ -327,8 +450,13 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
 
       for (const boundary of pathImportBoundaries) {
         if (matchesPrefix(relativePath, boundary.fromPaths) && matchesPrefix(imported, boundary.targetPaths)) {
-          violations.push({
-            rule: boundaryRuleName('path-import-boundary', boundary.id),
+          const rule = boundaryRuleName('path-import-boundary', boundary.id);
+          const status = effectiveArchitectureStatus(architecture.status, boundary);
+          if (status === 'candidate' && !options.includeCandidates) {
+            continue;
+          }
+          addArchitectureViolation(evaluations, status, rule, {
+            rule,
             path: relativePath,
             line: resolvedReference.line,
             detail: boundary.message ?? `import from ${imported} violates architecture boundary`,
@@ -345,8 +473,13 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
 
         for (const layerRule of boundary.rules) {
           if (layerRule.from === fromLayer.id && layerRule.disallow.includes(toLayer.id)) {
-            violations.push({
-              rule: boundaryRuleName('layer-boundary', boundary.id),
+            const rule = layerRuleName(boundary, layerRule);
+            const status = effectiveArchitectureStatus(architecture.status, layerRule, boundary);
+            if (status === 'candidate' && !options.includeCandidates) {
+              continue;
+            }
+            addArchitectureViolation(evaluations, status, rule, {
+              rule,
               path: relativePath,
               line: resolvedReference.line,
               detail: layerRule.message ?? `import from ${imported} violates architecture boundary`,
@@ -357,5 +490,9 @@ export function evaluateArchitecture(root: string, config: QualityGcConfig): Vio
     }
   }
 
-  return violations;
+  return [...evaluations.values()].filter(evaluation => options.includeCandidates || evaluation.status === 'blocking');
+}
+
+export function evaluateArchitecture(root: string, config: QualityGcConfig): Violation[] {
+  return evaluateArchitectureRules(root, config, { includeCandidates: true }).flatMap(evaluation => evaluation.violations);
 }

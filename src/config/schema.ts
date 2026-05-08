@@ -19,20 +19,24 @@ export const DEFAULT_NO_NEW_ANY_EXCLUDE = [
 
 export type RuleStatus = 'blocking' | 'candidate' | 'disabled';
 
-export interface ArchitectureBoundary {
+export interface ArchitectureRuleStatus {
+  status?: RuleStatus;
+}
+
+export interface ArchitectureBoundary extends ArchitectureRuleStatus {
   from: string[];
   disallowImportsFrom: string[];
   message?: string;
 }
 
-export interface ArchitectureServiceRoot {
+export interface ArchitectureServiceRoot extends ArchitectureRuleStatus {
   id: string;
   path: string;
   packageName?: string;
   public?: boolean;
 }
 
-export interface ArchitectureDomainBoundary {
+export interface ArchitectureDomainBoundary extends ArchitectureRuleStatus {
   id?: string;
   root: string;
   publicEntryPoints?: string[];
@@ -40,7 +44,7 @@ export interface ArchitectureDomainBoundary {
   message?: string;
 }
 
-export interface ArchitecturePathImportBoundary {
+export interface ArchitecturePathImportBoundary extends ArchitectureRuleStatus {
   id?: string;
   fromPaths: string[];
   targetPaths: string[];
@@ -52,19 +56,19 @@ export interface ArchitectureLayer {
   paths: string[];
 }
 
-export interface ArchitectureLayerRule {
+export interface ArchitectureLayerRule extends ArchitectureRuleStatus {
   from: string;
   disallow: string[];
   message?: string;
 }
 
-export interface ArchitectureLayerBoundary {
+export interface ArchitectureLayerBoundary extends ArchitectureRuleStatus {
   id?: string;
   layers: ArchitectureLayer[];
   rules: ArchitectureLayerRule[];
 }
 
-export interface ArchitectureExternalImportBoundary {
+export interface ArchitectureExternalImportBoundary extends ArchitectureRuleStatus {
   id?: string;
   sourcePaths: string[];
   exceptPaths?: string[];
@@ -72,7 +76,7 @@ export interface ArchitectureExternalImportBoundary {
   message?: string;
 }
 
-export interface ArchitectureSyntaxBoundary {
+export interface ArchitectureSyntaxBoundary extends ArchitectureRuleStatus {
   id?: string;
   sourcePaths: string[];
   exceptPaths?: string[];

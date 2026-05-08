@@ -497,6 +497,70 @@ describe('guardrail adoption model', () => {
     ]);
   });
 
+  it('keeps candidate architecture boundary violations out of blocking run and in cleanup findings', async () => {
+    const root = createNpmRepo();
+    writeText(
+      path.join(root, 'src/projects/domain/render-snapshot.entity.ts'),
+      [
+        "import type { RenderSnapshotRecord } from '../infrastructure/persistence/render-snapshot.record';",
+        'export interface RenderSnapshot {',
+        '  record?: RenderSnapshotRecord;',
+        '}',
+      ].join('\n'),
+    );
+    writeText(
+      path.join(root, 'src/projects/infrastructure/persistence/render-snapshot.record.ts'),
+      'export interface RenderSnapshotRecord { id: string; }\n',
+    );
+    const config = defaultConfig();
+    config.rules.architecture.layerBoundaries = [
+      {
+        id: 'projects',
+        layers: [
+          { id: 'domain', paths: ['src/projects/domain'] },
+          { id: 'infrastructure', paths: ['src/projects/infrastructure'] },
+        ],
+        rules: [
+          {
+            status: 'candidate',
+            from: 'domain',
+            disallow: ['infrastructure'],
+            message: 'Projects domain must not import infrastructure directly.',
+          },
+        ],
+      },
+    ];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+
+    await expect(runGuardrailsCommand({ root, json: true })).resolves.toBe(0);
+
+    const findings = await collectCleanupFindings(root);
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'candidate-architecture-layer-boundary-projects',
+          category: 'candidate-rule',
+          evidence: expect.arrayContaining([
+            expect.objectContaining({
+              path: 'src/projects/domain/render-snapshot.entity.ts',
+              detail: 'Projects domain must not import infrastructure directly.',
+            }),
+          ]),
+        }),
+      ]),
+    );
+    const actions = planIssueActions(findings);
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'create',
+          title: expect.stringContaining('[candidate-architecture-layer-boundary-projects]'),
+          labels: expect.arrayContaining(['quality-gc:candidate-rule']),
+        }),
+      ]),
+    );
+  });
+
   it('detects architecture path, external import, and syntax boundaries', () => {
     const root = createNpmRepo();
     writeText(
@@ -607,25 +671,26 @@ describe('guardrail adoption model', () => {
 
   it('validates architecture boundary config shape', () => {
     const config = defaultConfig();
-    config.rules.architecture.serviceRoots = [{ id: 'api', path: 'src/api', packageName: 'api-service' }];
-    config.rules.architecture.domains = [{ id: 'api', root: 'src/api', publicEntryPoints: ['src/api/index.ts'] }];
+    config.rules.architecture.serviceRoots = [{ id: 'api', path: 'src/api', packageName: 'api-service', status: 'candidate' }];
+    config.rules.architecture.domains = [{ id: 'api', root: 'src/api', publicEntryPoints: ['src/api/index.ts'], status: 'candidate' }];
     config.rules.architecture.pathImportBoundaries = [
-      { id: 'api-no-db', fromPaths: ['src/api/domain'], targetPaths: ['src/api/db'] },
+      { id: 'api-no-db', fromPaths: ['src/api/domain'], targetPaths: ['src/api/db'], status: 'candidate' },
     ];
     config.rules.architecture.externalImportBoundaries = [
-      { id: 'domain-no-mongoose', sourcePaths: ['src/api/domain'], forbiddenImportSpecifiers: ['mongoose'] },
+      { id: 'domain-no-mongoose', sourcePaths: ['src/api/domain'], forbiddenImportSpecifiers: ['mongoose'], status: 'candidate' },
     ];
     config.rules.architecture.syntaxBoundaries = [
-      { id: 'domain-no-env', sourcePaths: ['src/api/domain'], forbiddenSyntax: ['process.env'] },
+      { id: 'domain-no-env', sourcePaths: ['src/api/domain'], forbiddenSyntax: ['process.env'], status: 'candidate' },
     ];
     config.rules.architecture.layerBoundaries = [
       {
         id: 'api',
+        status: 'candidate',
         layers: [
           { id: 'domain', paths: ['src/api/domain'] },
           { id: 'persistence', paths: ['src/api/persistence'] },
         ],
-        rules: [{ from: 'domain', disallow: ['persistence'] }],
+        rules: [{ from: 'domain', disallow: ['persistence'], status: 'blocking' }],
       },
     ];
 
@@ -650,6 +715,20 @@ describe('guardrail adoption model', () => {
     ];
 
     expect(() => validateConfig(invalidSyntaxConfig)).toThrow(/unsupported forbidden syntax debugger/);
+
+    const invalidStatusConfig = defaultConfig();
+    invalidStatusConfig.rules.architecture.layerBoundaries = [
+      {
+        id: 'api',
+        layers: [
+          { id: 'domain', paths: ['src/api/domain'] },
+          { id: 'persistence', paths: ['src/api/persistence'] },
+        ],
+        rules: [{ from: 'domain', disallow: ['persistence'], status: 'preview' as 'candidate' }],
+      },
+    ];
+
+    expect(() => validateConfig(invalidStatusConfig)).toThrow(/rules\.architecture\.layerBoundaries\[0\]\.rules\[0\]\.status/);
   });
 
   it('keeps candidate violations advisory for quality-gc run', async () => {

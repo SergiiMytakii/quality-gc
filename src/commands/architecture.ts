@@ -1,5 +1,5 @@
 import { loadConfig } from '../config/load.js';
-import { evaluateArchitecture } from '../guards/architecture.js';
+import { evaluateArchitectureRules } from '../guards/architecture.js';
 import { formatViolation } from '../util/result.js';
 
 export interface ArchitectureCommandOptions {
@@ -9,17 +9,21 @@ export interface ArchitectureCommandOptions {
 
 export async function runArchitectureCommand(options: ArchitectureCommandOptions): Promise<number> {
   const config = await loadConfig(options.root);
-  const violations = config.rules.architecture.status === 'disabled' ? [] : evaluateArchitecture(options.root, config);
+  const results = evaluateArchitectureRules(options.root, config, { includeCandidates: true });
+  const violations = results.flatMap(result => result.violations);
+  const blockingFailures = results.filter(result => result.status === 'blocking' && result.violations.length > 0);
 
   if (options.json) {
-    console.log(JSON.stringify({ rule: 'architecture', violations }, null, 2));
+    console.log(JSON.stringify({ rule: 'architecture', results, violations }, null, 2));
   } else {
-    for (const violation of violations) {
-      console.log(formatViolation(violation));
+    for (const result of results) {
+      for (const violation of result.violations) {
+        console.log(`${result.status}: ${formatViolation(violation)}`);
+      }
     }
   }
 
-  if (config.rules.architecture.status === 'blocking' && violations.length > 0) {
+  if (blockingFailures.length > 0) {
     if (!options.json) {
       console.error('Quality GC architecture guardrail failed.');
     }

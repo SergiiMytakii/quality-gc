@@ -59,6 +59,12 @@ function validateOptionalString(value: unknown, name: string): void {
   }
 }
 
+function validateOptionalStatus(value: unknown, name: string): void {
+  if (value !== undefined && !isRuleStatus(value)) {
+    throw new Error(`Quality GC config ${name} must be blocking, candidate, or disabled.`);
+  }
+}
+
 function validateArchitectureConfig(config: Partial<QualityGcConfig>): void {
   const architecture = requireObject(config.rules?.architecture, 'rules.architecture');
   const boundaries = architecture.boundaries;
@@ -71,6 +77,7 @@ function validateArchitectureConfig(config: Partial<QualityGcConfig>): void {
     requireStringArray(entry.from, `rules.architecture.boundaries[${index}].from`);
     requireStringArray(entry.disallowImportsFrom, `rules.architecture.boundaries[${index}].disallowImportsFrom`);
     validateOptionalString(entry.message, `rules.architecture.boundaries[${index}].message`);
+    validateOptionalStatus(entry.status, `rules.architecture.boundaries[${index}].status`);
   }
 
   validateServiceRoots(architecture.serviceRoots);
@@ -93,6 +100,7 @@ function validateServiceRoots(value: unknown): void {
     requireString(entry.id, `rules.architecture.serviceRoots[${index}].id`);
     requireString(entry.path, `rules.architecture.serviceRoots[${index}].path`);
     validateOptionalString(entry.packageName, `rules.architecture.serviceRoots[${index}].packageName`);
+    validateOptionalStatus(entry.status, `rules.architecture.serviceRoots[${index}].status`);
     if (entry.public !== undefined) {
       requireBoolean(entry.public, `rules.architecture.serviceRoots[${index}].public`);
     }
@@ -113,6 +121,7 @@ function validateDomains(value: unknown): void {
     requireOptionalStringArray(entry.publicEntryPoints, `rules.architecture.domains[${index}].publicEntryPoints`);
     requireOptionalStringArray(entry.internalConsumerRoots, `rules.architecture.domains[${index}].internalConsumerRoots`);
     validateOptionalString(entry.message, `rules.architecture.domains[${index}].message`);
+    validateOptionalStatus(entry.status, `rules.architecture.domains[${index}].status`);
   }
 }
 
@@ -129,6 +138,7 @@ function validatePathImportBoundaries(value: unknown): void {
     requireStringArray(entry.fromPaths, `rules.architecture.pathImportBoundaries[${index}].fromPaths`);
     requireStringArray(entry.targetPaths, `rules.architecture.pathImportBoundaries[${index}].targetPaths`);
     validateOptionalString(entry.message, `rules.architecture.pathImportBoundaries[${index}].message`);
+    validateOptionalStatus(entry.status, `rules.architecture.pathImportBoundaries[${index}].status`);
   }
 }
 
@@ -142,6 +152,7 @@ function validateLayerBoundaries(value: unknown): void {
   for (const [boundaryIndex, boundary] of value.entries()) {
     const entry = requireObject(boundary, `rules.architecture.layerBoundaries[${boundaryIndex}]`);
     validateOptionalString(entry.id, `rules.architecture.layerBoundaries[${boundaryIndex}].id`);
+    validateOptionalStatus(entry.status, `rules.architecture.layerBoundaries[${boundaryIndex}].status`);
     if (!Array.isArray(entry.layers) || entry.layers.length === 0) {
       throw new Error(`Quality GC config rules.architecture.layerBoundaries[${boundaryIndex}].layers must not be empty.`);
     }
@@ -175,6 +186,7 @@ function validateLayerBoundaries(value: unknown): void {
         }
       }
       validateOptionalString(ruleEntry.message, `rules.architecture.layerBoundaries[${boundaryIndex}].rules[${ruleIndex}].message`);
+      validateOptionalStatus(ruleEntry.status, `rules.architecture.layerBoundaries[${boundaryIndex}].rules[${ruleIndex}].status`);
     }
   }
 }
@@ -196,6 +208,7 @@ function validateExternalImportBoundaries(value: unknown): void {
       `rules.architecture.externalImportBoundaries[${index}].forbiddenImportSpecifiers`,
     );
     validateOptionalString(entry.message, `rules.architecture.externalImportBoundaries[${index}].message`);
+    validateOptionalStatus(entry.status, `rules.architecture.externalImportBoundaries[${index}].status`);
   }
 }
 
@@ -221,6 +234,7 @@ function validateSyntaxBoundaries(value: unknown): void {
       requireBoolean(entry.includeTests, `rules.architecture.syntaxBoundaries[${index}].includeTests`);
     }
     validateOptionalString(entry.message, `rules.architecture.syntaxBoundaries[${index}].message`);
+    validateOptionalStatus(entry.status, `rules.architecture.syntaxBoundaries[${index}].status`);
   }
 }
 

@@ -21,7 +21,7 @@ Refreshes must still go through review. Do not auto-commit generated architectur
 4. Draft a minimal initial architecture config.
 5. Run the architecture command against the draft config.
 6. Run `quality-gc architecture-drift --root .` to confirm the refresh removed coverage drift or to explain remaining custom-layout gaps.
-7. If the config is invalid, fix the config shape. If it reports violations, keep valid intended rules and report the violations as code work.
+7. If the config is invalid, fix the config shape. If it reports violations, keep valid intended rules. Rules with existing violations should be `candidate` unless the user explicitly wants CI to fail immediately.
 
 ## Project Shape Classification
 
@@ -98,6 +98,7 @@ rules: {
         ],
         rules: [
           {
+            status: 'candidate',
             from: 'domain',
             disallow: ['persistence', 'infrastructure'],
             message: 'Application/domain code must not import persistence or infrastructure directly.',
@@ -117,6 +118,7 @@ rules: {
 - Every configured path must be repository-relative and non-empty.
 - Every `layerBoundaries.rules[].from` value must reference a layer id from the same boundary.
 - Every `layerBoundaries.rules[].disallow[]` value must reference layer ids from the same boundary.
+- Optional architecture entry statuses must be `blocking`, `candidate`, or `disabled`.
 - `syntaxBoundaries[].forbiddenSyntax` currently supports only `process.env`.
-- Existing violations are not permanent allowlists. Configure the intended rule and report the violations.
+- Existing violations are not permanent allowlists. Configure the intended rule as `candidate` so Cleanup Scan can create an issue without breaking blocking guardrails.
 - Leave architecture rules empty only when there is no stable ownership boundary to infer from. State exact evidence when this happens.
