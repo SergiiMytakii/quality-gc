@@ -11,8 +11,15 @@ import {
 } from './skills/install.js';
 
 type PostinstallChoice = 'codex' | 'claude-code' | 'both' | 'skip';
+type SkillUpdateChoice = 'update' | 'diff';
 
 const VALID_CHOICES = new Set<PostinstallChoice>(['codex', 'claude-code', 'both', 'skip']);
+
+interface PromptSession {
+  input: NodeJS.ReadableStream;
+  output: NodeJS.WritableStream;
+  close: () => void;
+}
 
 export function normalizePostinstallChoice(value: string | undefined): PostinstallChoice | null {
   if (!value) {
@@ -39,6 +46,17 @@ export function normalizePostinstallChoice(value: string | undefined): Postinsta
   return null;
 }
 
+export function normalizeSkillUpdateChoice(value: string | undefined): SkillUpdateChoice | null {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  if (normalized === '' || normalized === '2' || normalized === 'd' || normalized === 'diff' || normalized === 'n' || normalized === 'no') {
+    return 'diff';
+  }
+  if (normalized === '1' || normalized === 'u' || normalized === 'update' || normalized === 'y' || normalized === 'yes') {
+    return 'update';
+  }
+  return null;
+}
+
 export function targetsForChoice(choice: PostinstallChoice): SkillTarget[] {
   if (choice === 'codex') {
     return ['codex'];
@@ -52,29 +70,123 @@ export function targetsForChoice(choice: PostinstallChoice): SkillTarget[] {
   return [];
 }
 
-export function shouldPromptForSkillInstall(env: NodeJS.ProcessEnv, stdinIsTTY: boolean, stdoutIsTTY: boolean): boolean {
+export function shouldPromptForSkillInstall(
+  env: NodeJS.ProcessEnv,
+  stdinIsTTY: boolean,
+  stdoutIsTTY: boolean,
+  controllingTerminalAvailable = false,
+): boolean {
   if (normalizePostinstallChoice(env.QUALITY_GC_INSTALL_SKILL) === 'skip') {
     return false;
   }
   if (env.CI === 'true' || env.QUALITY_GC_SKIP_POSTINSTALL === '1') {
     return false;
   }
-  return stdinIsTTY && stdoutIsTTY;
+  return (stdinIsTTY && stdoutIsTTY) || controllingTerminalAvailable;
+}
+
+export function hasControllingTerminal(ttyPath = '/dev/tty'): boolean {
+  if (process.platform === 'win32') {
+    return false;
+  }
+  try {
+    const fd = fs.openSync(ttyPath, 'r+');
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createControllingTerminalPromptSession(): PromptSession | null {
+  if (process.platform === 'win32') {
+    return null;
+  }
+
+  let readFd: number | null = null;
+  let writeFd: number | null = null;
+  try {
+    readFd = fs.openSync('/dev/tty', 'r');
+    writeFd = fs.openSync('/dev/tty', 'w');
+    const input = fs.createReadStream('/dev/tty', { fd: readFd, autoClose: true });
+    const output = fs.createWriteStream('/dev/tty', { fd: writeFd, autoClose: true });
+    return {
+      input,
+      output,
+      close: () => {
+        input.destroy();
+        output.end();
+      },
+    };
+  } catch {
+    if (readFd !== null) {
+      fs.closeSync(readFd);
+    }
+    if (writeFd !== null) {
+      fs.closeSync(writeFd);
+    }
+    return null;
+  }
+}
+
+function createPromptSession(): PromptSession | null {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    return {
+      input: process.stdin,
+      output: process.stdout,
+      close: () => {},
+    };
+  }
+  return createControllingTerminalPromptSession();
 }
 
 function canPrompt(): boolean {
-  return shouldPromptForSkillInstall(process.env, process.stdin.isTTY, process.stdout.isTTY);
+  if (
+    normalizePostinstallChoice(process.env.QUALITY_GC_INSTALL_SKILL) === 'skip' ||
+    process.env.CI === 'true' ||
+    process.env.QUALITY_GC_SKIP_POSTINSTALL === '1'
+  ) {
+    return false;
+  }
+
+  const stdinIsTTY = process.stdin.isTTY === true;
+  const stdoutIsTTY = process.stdout.isTTY === true;
+  if (stdinIsTTY && stdoutIsTTY) {
+    return true;
+  }
+  return shouldPromptForSkillInstall(process.env, stdinIsTTY, stdoutIsTTY, hasControllingTerminal());
+}
+
+function writePromptLine(output: NodeJS.WritableStream, line = ''): void {
+  output.write(`${line}\n`);
+}
+
+async function withPromptSession<T>(
+  prompt: (rl: readline.Interface, output: NodeJS.WritableStream) => Promise<T>,
+): Promise<T> {
+  const session = createPromptSession();
+  if (!session) {
+    throw new Error('No interactive terminal is available');
+  }
+
+  const rl = readline.createInterface({ input: session.input, output: session.output });
+  try {
+    return await prompt(rl, session.output);
+  } finally {
+    rl.close();
+    session.close();
+  }
 }
 
 async function promptForChoice(): Promise<PostinstallChoice> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    console.log('\nQuality GC can install the setup-agent skill now.');
-    console.log('Choose where to install it:');
-    console.log('  1. Codex');
-    console.log('  2. Claude Code');
-    console.log('  3. Both');
-    console.log('  4. Skip');
+  return withPromptSession(async (rl, output) => {
+    writePromptLine(output);
+    writePromptLine(output, 'Quality GC can install the setup-agent skill now.');
+    writePromptLine(output, 'Choose where to install it:');
+    writePromptLine(output, '  1. Codex');
+    writePromptLine(output, '  2. Claude Code');
+    writePromptLine(output, '  3. Both');
+    writePromptLine(output, '  4. Skip');
 
     for (;;) {
       const answer = await rl.question('Install Quality GC skill for [1/2/3/4]? ');
@@ -82,26 +194,32 @@ async function promptForChoice(): Promise<PostinstallChoice> {
       if (choice) {
         return choice;
       }
-      console.log('Please enter 1, 2, 3, or 4.');
+      writePromptLine(output, 'Please enter 1, 2, 3, or 4.');
     }
-  } finally {
-    rl.close();
-  }
+  });
 }
 
 async function promptForSkillUpdate(destinations: string[]): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    console.log('\nQuality GC setup-agent skill already exists and differs from the packaged version.');
-    console.log('Update these files?');
+  return withPromptSession(async (rl, output) => {
+    writePromptLine(output);
+    writePromptLine(output, 'Quality GC setup-agent skill already exists and differs from the packaged version.');
+    writePromptLine(output, 'Affected files:');
     for (const destination of destinations) {
-      console.log(`  - ${destination}`);
+      writePromptLine(output, `  - ${destination}`);
     }
-    const answer = await rl.question('Update Quality GC skill? [y/N] ');
-    return answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes';
-  } finally {
-    rl.close();
-  }
+    writePromptLine(output, 'Choose what to do:');
+    writePromptLine(output, '  1. Update the installed skill now');
+    writePromptLine(output, '  2. Keep the current skill and write a diff report');
+
+    for (;;) {
+      const answer = await rl.question('Update Quality GC skill now? [1/2, default 2] ');
+      const choice = normalizeSkillUpdateChoice(answer);
+      if (choice) {
+        return choice === 'update';
+      }
+      writePromptLine(output, 'Please enter 1 to update or 2 to write a diff report.');
+    }
+  });
 }
 
 function projectRoot(): string {

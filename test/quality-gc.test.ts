@@ -24,6 +24,7 @@ import {
 import {
   defaultPostinstallChoice,
   normalizePostinstallChoice,
+  normalizeSkillUpdateChoice,
   shouldPromptForSkillInstall,
   targetsForChoice,
 } from '../src/postinstall.js';
@@ -1014,6 +1015,23 @@ describe('workflow and skill installer contracts', () => {
     expect(readText(reportPath ?? '')).toContain('packaged quality-gc skill');
   });
 
+  it('keeps skill update reports short when installed skill files differ heavily', () => {
+    const root = createNpmRepo();
+    const home = tempDir('quality-gc-home-');
+    const plan = createSkillInstallPlan({ target: 'codex', scope: 'project', root, home });
+    writeText(
+      plan.files[0].destination,
+      Array.from({ length: 80 }, (_, index) => `local custom skill line ${index + 1}`).join('\n') + '\n',
+    );
+    const report = createSkillUpdateReport(createSkillInstallPlan({ target: 'codex', scope: 'project', root, home }), root);
+
+    expect(report?.content).toContain('Nothing was overwritten.');
+    expect(report?.content).toContain('Short change preview:');
+    expect(report?.content).toContain('more changed lines hidden');
+    expect(report?.content).toContain('-local custom skill line 1');
+    expect(report?.content).not.toContain('local custom skill line 80');
+  });
+
   it('keeps install-skill JSON output parseable when an update report is written', async () => {
     const root = createNpmRepo();
     writeText(path.join(root, '.codex/skills/quality-gc-setup-agent/SKILL.md'), '# local custom skill\n');
@@ -1053,6 +1071,10 @@ describe('workflow and skill installer contracts', () => {
     expect(normalizePostinstallChoice('2')).toBe('claude-code');
     expect(normalizePostinstallChoice('3')).toBe('both');
     expect(normalizePostinstallChoice('4')).toBe('skip');
+    expect(normalizeSkillUpdateChoice('1')).toBe('update');
+    expect(normalizeSkillUpdateChoice('yes')).toBe('update');
+    expect(normalizeSkillUpdateChoice('2')).toBe('diff');
+    expect(normalizeSkillUpdateChoice('')).toBe('diff');
     expect(targetsForChoice('both')).toEqual(['codex', 'claude-code']);
     expect(defaultPostinstallChoice({})).toBe('codex');
     expect(defaultPostinstallChoice({ CI: 'true' })).toBe('skip');
@@ -1061,6 +1083,7 @@ describe('workflow and skill installer contracts', () => {
     expect(shouldPromptForSkillInstall({ CI: 'true' }, true, true)).toBe(false);
     expect(shouldPromptForSkillInstall({ QUALITY_GC_INSTALL_SKILL: 'skip' }, true, true)).toBe(false);
     expect(shouldPromptForSkillInstall({}, false, true)).toBe(false);
+    expect(shouldPromptForSkillInstall({}, false, false, true)).toBe(true);
     expect(shouldPromptForSkillInstall({}, true, true)).toBe(true);
   });
 });

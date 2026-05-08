@@ -165,6 +165,20 @@ function relativeReportPath(destination: string, root: string): string {
   return relative.startsWith('..') ? destination : relative;
 }
 
+const MAX_SKILL_REPORT_PREVIEW_LINES = 24;
+
+function appendChangedLinesPreview(lines: string[], marker: '-' | '+', changedLines: string[]): void {
+  const previewLines = changedLines.slice(0, MAX_SKILL_REPORT_PREVIEW_LINES);
+  for (const line of previewLines) {
+    lines.push(`${marker}${line}`);
+  }
+
+  const hiddenLineCount = changedLines.length - previewLines.length;
+  if (hiddenLineCount > 0) {
+    lines.push(`${marker}... ${hiddenLineCount} more changed line${hiddenLineCount === 1 ? '' : 's'} hidden`);
+  }
+}
+
 function renderChangedRangeDiff(before: string, after: string): string {
   const beforeLines = before.split('\n');
   const afterLines = after.split('\n');
@@ -180,13 +194,13 @@ function renderChangedRangeDiff(before: string, after: string): string {
     afterEnd -= 1;
   }
 
-  const lines = [`@@ changed lines from ${start + 1} @@`];
-  for (let index = start; index <= beforeEnd; index += 1) {
-    lines.push(`-${beforeLines[index]}`);
-  }
-  for (let index = start; index <= afterEnd; index += 1) {
-    lines.push(`+${afterLines[index]}`);
-  }
+  const beforeChangedLines = beforeEnd >= start ? beforeLines.slice(start, beforeEnd + 1) : [];
+  const afterChangedLines = afterEnd >= start ? afterLines.slice(start, afterEnd + 1) : [];
+  const hiddenLineCount = Math.max(beforeChangedLines.length, afterChangedLines.length) - MAX_SKILL_REPORT_PREVIEW_LINES;
+  const previewNote = hiddenLineCount > 0 ? `, preview only` : '';
+  const lines = [`@@ first changed line ${start + 1}${previewNote} @@`];
+  appendChangedLinesPreview(lines, '-', beforeChangedLines);
+  appendChangedLinesPreview(lines, '+', afterChangedLines);
   return lines.join('\n');
 }
 
@@ -200,9 +214,17 @@ export function createSkillUpdateReport(plan: SkillInstallPlan, root: string): S
     '# Quality GC Skill Update',
     '',
     'Quality GC found an existing setup-agent skill that differs from the packaged version.',
-    'The existing files were left unchanged.',
+    'Nothing was overwritten.',
     '',
-    'Review the diff below, then run the install command again and approve the update if these changes look correct.',
+    'To update it, run:',
+    '',
+    '```sh',
+    `quality-gc install-skill --target ${plan.target} --scope ${plan.scope} --root . --apply`,
+    '```',
+    '',
+    'Then approve the update when prompted.',
+    '',
+    'Short change preview:',
   ];
 
   for (const file of conflicts) {

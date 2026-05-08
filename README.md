@@ -122,6 +122,28 @@ The agent should:
 
 The agent should not invent architecture rules blindly. It should detect the project shape first: single package, monorepo, frontend app, backend service, fullstack app, library, CLI package, or custom layout.
 
+
+## How to update package
+
+To update the package, run:
+
+```sh
+npm update quality-gc
+```
+
+For pnpm:
+
+```sh
+pnpm add -D -w quality-gc@latest --allow-build=quality-gc
+
+```
+
+For Yarn:
+
+```sh
+yarn upgrade quality-gc
+```
+
 ## Manual Setup
 
 Preview:
