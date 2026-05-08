@@ -41,64 +41,52 @@ When a repository has an `origin/HEAD`, apply mode refuses to write on the defau
 
 ## Quick Start
 
-### 1. Install The Package
+### 1. Install The Package And Skill
 
-For npm projects:
+Choose the setup-agent skill during package installation.
 
-```sh
-npm install -D quality-gc --foreground-scripts
-```
-
-For pnpm workspaces:
-
-```sh
-pnpm add -D -w quality-gc
-```
-
-During interactive installs, `quality-gc` offers to install the setup-agent skill for Codex, Claude Code, both, or neither.
-
-If your package manager hides lifecycle prompts, install the package first and then run one of the commands below. You can also make the install non-interactive:
+For npm projects with Codex:
 
 ```sh
 QUALITY_GC_INSTALL_SKILL=codex npm install -D quality-gc --foreground-scripts
+```
+
+For npm projects with Claude Code:
+
+```sh
 QUALITY_GC_INSTALL_SKILL=claude-code npm install -D quality-gc --foreground-scripts
+```
+
+For both:
+
+```sh
 QUALITY_GC_INSTALL_SKILL=both npm install -D quality-gc --foreground-scripts
-QUALITY_GC_INSTALL_SKILL=skip npm install -D quality-gc
+```
+
+For pnpm workspaces with Codex:
+
+```sh
 QUALITY_GC_INSTALL_SKILL=codex pnpm add -D -w quality-gc
+```
+
+For pnpm workspaces with Claude Code:
+
+```sh
 QUALITY_GC_INSTALL_SKILL=claude-code pnpm add -D -w quality-gc
 ```
 
-Do not use `npm install` inside a pnpm workspace with an existing pnpm-managed `node_modules`; npm can fail while trying to read pnpm symlinks.
-
-### 2. Install A Setup Agent Skill Manually
-
-If you skipped the install prompt or your package manager did not expose it, install a skill manually.
-
-For Codex:
+To skip skill installation:
 
 ```sh
-npx quality-gc install-skill --target codex --scope project --root . --apply
+QUALITY_GC_INSTALL_SKILL=skip npm install -D quality-gc
+QUALITY_GC_INSTALL_SKILL=skip pnpm add -D -w quality-gc
 ```
 
-With pnpm:
+You can also omit `QUALITY_GC_INSTALL_SKILL` and let the package ask interactively, but some package managers hide lifecycle prompts. The environment variable is the reliable path.
 
-```sh
-pnpm exec quality-gc install-skill --target codex --scope project --root . --apply
-```
+Do not use `npm install` inside a pnpm workspace with an existing pnpm-managed `node_modules`; use `pnpm add -D -w quality-gc` instead.
 
-For Claude Code:
-
-```sh
-npx quality-gc install-skill --target claude-code --scope project --root . --apply
-```
-
-With pnpm:
-
-```sh
-pnpm exec quality-gc install-skill --target claude-code --scope project --root . --apply
-```
-
-### 3. Run The Setup Agent
+### 2. Run The Setup Agent
 
 In Codex, call:
 
@@ -115,15 +103,32 @@ Install Quality GC production-ready for this repo. Start with preview mode and d
 The expected flow is:
 
 1. The agent inspects the repository.
-2. If the package is missing, the agent installs it as a dev dependency with the repository package manager.
-3. The agent runs preview commands through `npx quality-gc` or `pnpm exec quality-gc`.
-4. You review the plan.
-5. You approve apply.
-6. The agent creates a setup branch.
-7. The agent applies setup, runs checks, commits, pushes, and opens a PR.
-8. After merge, you approve a live Cleanup Scan issue-write proof.
+2. The agent runs preview commands through `npx quality-gc` or `pnpm exec quality-gc`.
+3. You review the plan.
+4. You approve apply.
+5. The agent creates a setup branch.
+6. The agent applies setup, runs checks, commits, pushes, and opens a PR.
+7. After merge, you approve a live Cleanup Scan issue-write proof.
 
 The setup agent should explain progress in user-facing language. A good preview message should say what it checked, what Quality GC will add, what has not been changed yet, and the exact approval phrase to continue. It should not ask users to understand internal details such as package caches, working trees, or raw CLI output.
+
+### Manual Skill Install Fallback
+
+Use this only if you installed with `QUALITY_GC_INSTALL_SKILL=skip` or your package manager disabled lifecycle scripts.
+
+For Codex:
+
+```sh
+npx quality-gc install-skill --target codex --scope project --root . --apply
+```
+
+For Claude Code:
+
+```sh
+npx quality-gc install-skill --target claude-code --scope project --root . --apply
+```
+
+With pnpm, replace `npx quality-gc` with `pnpm exec quality-gc`.
 
 ## Manual Setup Without An Agent
 
