@@ -1,0 +1,463 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { validateConfig } from '../src/config/load.js';
+import { defaultConfig, PACKAGE_VERSION, renderConfig } from '../src/config/schema.js';
+import { main } from '../src/cli.js';
+import { collectCleanupFindings } from '../src/commands/cleanup-scan.js';
+import { runGuardrailsCommand } from '../src/commands/run.js';
+import { issueMarker, planIssueActions } from '../src/github/issues.js';
+import { planLabelActions } from '../src/github/labels.js';
+import { createMigrationPlan, createSetupPlan } from '../src/setup/plan.js';
+import { applySetupPlan } from '../src/setup/apply.js';
+import { writeNoNewAnyBaseline, evaluateNoNewAny } from '../src/guards/no-new-any.js';
+import { cleanupScanWorkflow } from '../src/workflows/templates.js';
+import { createSkillInstallPlan, applySkillInstallPlan } from '../src/skills/install.js';
+import { normalizePostinstallChoice, shouldPromptForSkillInstall, targetsForChoice } from '../src/postinstall.js';
+import { fileExists, readJson, readText, writeText } from '../src/util/fs.js';
+import { requireSuccessfulCommand } from '../src/util/exec.js';
+
+function tempDir(prefix: string): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function createNpmRepo(): string {
+  const root = tempDir('quality-gc-fixture-');
+  writeText(
+    path.join(root, 'package.json'),
+    `${JSON.stringify({ name: 'fixture', version: '1.0.0', type: 'module' }, null, 2)}\n`,
+  );
+  writeText(path.join(root, 'src/index.ts'), 'export const value: string = "ok";\n');
+  requireSuccessfulCommand('git', ['init'], { cwd: root });
+  requireSuccessfulCommand('git', ['config', 'user.email', 'quality-gc@example.com'], { cwd: root });
+  requireSuccessfulCommand('git', ['config', 'user.name', 'Quality GC'], { cwd: root });
+  return root;
+}
+
+function createNpmRepoWithoutSource(): string {
+  const root = tempDir('quality-gc-fixture-');
+  writeText(
+    path.join(root, 'package.json'),
+    `${JSON.stringify({ name: 'fixture', version: '1.0.0', type: 'module' }, null, 2)}\n`,
+  );
+  requireSuccessfulCommand('git', ['init'], { cwd: root });
+  requireSuccessfulCommand('git', ['config', 'user.email', 'quality-gc@example.com'], { cwd: root });
+  requireSuccessfulCommand('git', ['config', 'user.name', 'Quality GC'], { cwd: root });
+  return root;
+}
+
+function createPnpmRepo(): string {
+  const root = createNpmRepo();
+  writeText(
+    path.join(root, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: 'fixture',
+        version: '1.0.0',
+        type: 'module',
+        packageManager: 'pnpm@10.17.1',
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeText(path.join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+  return root;
+}
+
+async function captureStdout(run: () => Promise<number>): Promise<{ exitCode: number; stdout: string }> {
+  const lines: string[] = [];
+  const logSpy = vi.spyOn(console, 'log').mockImplementation((message?: unknown, ...optionalParams: unknown[]) => {
+    lines.push([message, ...optionalParams].map(value => String(value)).join(' '));
+  });
+  try {
+    return {
+      exitCode: await run(),
+      stdout: lines.join('\n'),
+    };
+  } finally {
+    logSpy.mockRestore();
+  }
+}
+
+describe('setup and migrate safety', () => {
+  it('previews setup without writing files', () => {
+    const root = createNpmRepo();
+    const plan = createSetupPlan(root, { packageSource: 'github:SergiiMytakii/quality-gc#main' });
+
+    expect(plan.changes.map(change => change.path)).toContain('.quality-gc/quality-gc.config.mjs');
+    expect(fileExists(path.join(root, '.quality-gc/quality-gc.config.mjs'))).toBe(false);
+    expect(plan.changes.every(change => change.action !== 'conflict')).toBe(true);
+  });
+
+  it('applies setup with a pre-publish package source', () => {
+    const root = createNpmRepo();
+    const plan = createSetupPlan(root, { packageSource: 'github:SergiiMytakii/quality-gc#main' });
+    const written = applySetupPlan(plan);
+    const packageJson = readJson<{ devDependencies: Record<string, string>; scripts: Record<string, string> }>(
+      path.join(root, 'package.json'),
+    );
+
+    expect(written).toContain('.github/workflows/quality-gc-cleanup-scan.yml');
+    expect(packageJson.devDependencies['quality-gc']).toBe('github:SergiiMytakii/quality-gc#main');
+    expect(packageJson.scripts['quality:gc']).toBe('quality-gc run --root .');
+  });
+
+  it('updates an already installed npm quality-gc version during setup', () => {
+    const root = createNpmRepo();
+    const packageJsonPath = path.join(root, 'package.json');
+    const packageJson = readJson<Record<string, unknown>>(packageJsonPath);
+    writeText(
+      packageJsonPath,
+      `${JSON.stringify(
+        {
+          ...packageJson,
+          devDependencies: {
+            'quality-gc': '^0.1.1',
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const targetSource = `^${PACKAGE_VERSION}`;
+    const plan = createSetupPlan(root, { packageSource: targetSource });
+    const packageChange = plan.changes.find(change => change.path === 'package.json');
+
+    expect(packageChange?.action).toBe('update');
+    expect(packageChange?.reason).not.toContain(`not ${targetSource}`);
+    expect(JSON.parse(packageChange?.content ?? '{}').devDependencies['quality-gc']).toBe(targetSource);
+  });
+
+  it('does not replace a custom quality-gc package source during setup', () => {
+    const root = createNpmRepo();
+    const packageJsonPath = path.join(root, 'package.json');
+    const packageJson = readJson<Record<string, unknown>>(packageJsonPath);
+    writeText(
+      packageJsonPath,
+      `${JSON.stringify(
+        {
+          ...packageJson,
+          devDependencies: {
+            'quality-gc': 'github:SergiiMytakii/quality-gc#main',
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const plan = createSetupPlan(root, { packageSource: `^${PACKAGE_VERSION}` });
+    const packageChange = plan.changes.find(change => change.path === 'package.json');
+
+    expect(packageChange?.action).toBe('conflict');
+  });
+
+  it('generates pnpm GitHub workflows for pnpm repositories', () => {
+    const root = createPnpmRepo();
+    const plan = createSetupPlan(root);
+    const architecture = plan.changes.find(change => change.path === '.github/workflows/quality-gc-architecture.yml');
+    const cleanupScan = plan.changes.find(change => change.path === '.github/workflows/quality-gc-cleanup-scan.yml');
+    const docs = plan.changes.find(change => change.path === 'docs/quality-gc.md');
+
+    expect(architecture?.content).toContain('cache: pnpm');
+    expect(architecture?.content).toContain('uses: pnpm/action-setup@v4');
+    expect(architecture?.content).toContain('run_install: false');
+    expect(architecture?.content).toContain('run: pnpm install --frozen-lockfile');
+    expect(architecture?.content).toContain('run: pnpm run quality:gc:architecture');
+    expect(architecture?.content).not.toContain('npm ci');
+    expect(architecture?.content.indexOf('uses: pnpm/action-setup@v4')).toBeLessThan(
+      architecture?.content.indexOf('uses: actions/setup-node@v4') ?? -1,
+    );
+    expect(cleanupScan?.content).toContain('pnpm run quality:gc:cleanup-scan:write -- --repo "$GITHUB_REPOSITORY"');
+    expect(docs?.content).toContain('detected pnpm');
+  });
+
+  it('detects TypeScript source roots for repositories without root src', () => {
+    const root = createNpmRepoWithoutSource();
+    writeText(path.join(root, 'apps/web/src/index.ts'), 'export const value: any = "covered";\n');
+    writeText(path.join(root, 'packages/core/src/index.ts'), 'export const value: string = "covered";\n');
+
+    const plan = createSetupPlan(root);
+    const configChange = plan.changes.find(change => change.path === '.quality-gc/quality-gc.config.mjs');
+    const baselineChange = plan.changes.find(change => change.path === '.quality-gc/no-new-any-baseline.json');
+    const configText = configChange?.content ?? '';
+    const baseline = JSON.parse(baselineChange?.content ?? '{}') as { files: Record<string, number> };
+
+    expect(configText).toContain('"apps/**/*.{ts,tsx}"');
+    expect(configText).toContain('"packages/**/*.{ts,tsx}"');
+    expect(configText).not.toContain('"src/**/*.{ts,tsx}"');
+    expect(baseline.files).toEqual({ 'apps/web/src/index.ts': 1 });
+  });
+
+  it('detects service-level TypeScript roots in package-based monorepos', () => {
+    const root = createNpmRepoWithoutSource();
+    writeText(path.join(root, 'apps/frontend/package.json'), '{"name":"frontend"}\n');
+    writeText(path.join(root, 'apps/frontend/src/index.tsx'), 'export const value: any = "frontend";\n');
+    writeText(path.join(root, 'apps/backend/package.json'), '{"name":"backend"}\n');
+    writeText(path.join(root, 'apps/backend/src/index.ts'), 'export const value: string = "backend";\n');
+    writeText(path.join(root, 'services/worker/package.json'), '{"name":"worker"}\n');
+    writeText(path.join(root, 'services/worker/src/index.ts'), 'export const value: any = "worker";\n');
+    writeText(path.join(root, 'packages/shared/package.json'), '{"name":"shared"}\n');
+    writeText(path.join(root, 'packages/shared/src/index.ts'), 'export const value: string = "shared";\n');
+
+    const plan = createSetupPlan(root);
+    const configChange = plan.changes.find(change => change.path === '.quality-gc/quality-gc.config.mjs');
+    const baselineChange = plan.changes.find(change => change.path === '.quality-gc/no-new-any-baseline.json');
+    const configText = configChange?.content ?? '';
+    const baseline = JSON.parse(baselineChange?.content ?? '{}') as { files: Record<string, number> };
+
+    expect(configText).toContain('"apps/backend/**/*.{ts,tsx}"');
+    expect(configText).toContain('"apps/frontend/**/*.{ts,tsx}"');
+    expect(configText).toContain('"packages/shared/**/*.{ts,tsx}"');
+    expect(configText).toContain('"services/worker/**/*.{ts,tsx}"');
+    expect(configText).not.toContain('"apps/**/*.{ts,tsx}"');
+    expect(configText).not.toContain('"services/**/*.{ts,tsx}"');
+    expect(baseline.files).toEqual({
+      'apps/frontend/src/index.tsx': 1,
+      'services/worker/src/index.ts': 1,
+    });
+  });
+
+  it('refuses unmanaged generated files', () => {
+    const root = createNpmRepo();
+    writeText(path.join(root, 'docs/quality-gc.md'), '# local docs\n');
+
+    const plan = createSetupPlan(root);
+    const conflict = plan.changes.find(change => change.path === 'docs/quality-gc.md');
+
+    expect(conflict?.action).toBe('conflict');
+    expect(() => applySetupPlan(plan)).toThrow(/Refusing to apply/);
+  });
+
+  it('rejects invalid config without schemaVersion', () => {
+    expect(() => validateConfig({ installedVersion: '0.1.0', rules: {} })).toThrow(/schemaVersion/);
+  });
+
+  it('migrates old owned config and package source without blind overwrite conflicts', async () => {
+    const root = createNpmRepo();
+    applySetupPlan(createSetupPlan(root, { packageSource: '^0.0.1' }));
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(defaultConfig('0.0.1')));
+
+    const plan = await createMigrationPlan(root, { packageSource: `^${PACKAGE_VERSION}` });
+    expect(plan.changes.every(change => change.action !== 'conflict')).toBe(true);
+
+    applySetupPlan(plan);
+    const packageJson = readJson<{ devDependencies: Record<string, string> }>(path.join(root, 'package.json'));
+    const configText = readText(path.join(root, '.quality-gc/quality-gc.config.mjs'));
+
+    expect(packageJson.devDependencies['quality-gc']).toBe(`^${PACKAGE_VERSION}`);
+    expect(configText).toContain(`"installedVersion": "${PACKAGE_VERSION}"`);
+  });
+
+  it('routes setup through migration and updates legacy src-only no-new-any config', async () => {
+    const root = createNpmRepoWithoutSource();
+    writeText(path.join(root, 'apps/web/src/index.ts'), 'export const value: any = "covered";\n');
+    writeText(path.join(root, 'packages/core/src/index.ts'), 'export const value: string = "covered";\n');
+    const legacyConfig = defaultConfig('0.1.2');
+    legacyConfig.rules.noNewAny.include = ['src/**/*.{ts,tsx}'];
+    legacyConfig.rules.noNewAny.exclude = [
+      'src/**/__tests__/**',
+      'src/**/*.spec.ts',
+      'src/**/*.spec.tsx',
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/scripts/**',
+    ];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(legacyConfig));
+
+    const result = await captureStdout(() => main(['setup', '--root', root, '--json']));
+    const payload = JSON.parse(result.stdout) as { plan: { changes: Array<{ path: string; content: string }> } };
+    const configChange = payload.plan.changes.find(change => change.path === '.quality-gc/quality-gc.config.mjs');
+    const baselineChange = payload.plan.changes.find(change => change.path === '.quality-gc/no-new-any-baseline.json');
+    const baseline = JSON.parse(baselineChange?.content ?? '{}') as { files: Record<string, number> };
+
+    expect(result.exitCode).toBe(0);
+    expect(configChange?.content).toContain('"apps/**/*.{ts,tsx}"');
+    expect(configChange?.content).toContain('"packages/**/*.{ts,tsx}"');
+    expect(configChange?.content).not.toContain('"src/**/*.{ts,tsx}"');
+    expect(baseline.files).toEqual({ 'apps/web/src/index.ts': 1 });
+  });
+});
+
+describe('CLI output contracts', () => {
+  it('emits parseable JSON without trailing status prose', async () => {
+    const root = createNpmRepo();
+    const result = await captureStdout(() => main(['run', '--root', root, '--json']));
+
+    expect(result.exitCode).toBe(0);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(result.stdout).not.toContain('Quality GC blocking guardrails passed');
+  });
+});
+
+describe('guardrail adoption model', () => {
+  it('detects explicit any above baseline', () => {
+    const root = createNpmRepo();
+    writeNoNewAnyBaseline(root, '.quality-gc/no-new-any-baseline.json');
+    writeText(path.join(root, 'src/index.ts'), 'export const value: any = "bad";\n');
+    const config = defaultConfig();
+
+    expect(evaluateNoNewAny(root, config)).toHaveLength(1);
+  });
+
+  it('honors no-new-any include and exclude config', () => {
+    const root = createNpmRepo();
+    writeText(path.join(root, 'src/index.ts'), 'export const value: any = "covered";\n');
+    writeText(path.join(root, 'tools/script.ts'), 'export const value: any = "ignored";\n');
+    const config = defaultConfig();
+    config.rules.noNewAny.include = ['src/**/*.ts', 'tools/**/*.ts'];
+    config.rules.noNewAny.exclude = ['tools/**/*.ts'];
+
+    const violations = evaluateNoNewAny(root, config);
+
+    expect(violations).toEqual([expect.objectContaining({ path: 'src/index.ts' })]);
+  });
+
+  it('keeps candidate violations advisory for quality-gc run', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.noNewAny.status = 'disabled';
+    config.rules.staleLivePath.status = 'candidate';
+    config.rules.staleLivePath.retiredPaths = ['src/old-live-path'];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+    writeText(path.join(root, '.github/workflows/test.yml'), 'run: node src/old-live-path/index.js\n');
+
+    await expect(runGuardrailsCommand({ root, json: true })).resolves.toBe(0);
+    const findings = await collectCleanupFindings(root);
+
+    expect(findings.some(finding => finding.key === 'candidate-stale-live-path')).toBe(true);
+  });
+
+  it('creates promotion findings for clean candidate rules', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.noNewAny.status = 'disabled';
+    config.rules.staleLivePath.status = 'candidate';
+    config.rules.staleLivePath.retiredPaths = ['src/old-live-path'];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+
+    const findings = await collectCleanupFindings(root);
+
+    expect(findings.some(finding => finding.key === 'promote-stale-live-path')).toBe(true);
+  });
+
+  it('does not promote unconfigured candidate rules', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.noNewAny.status = 'disabled';
+    config.rules.staleLivePath.status = 'candidate';
+    config.rules.staleLivePath.retiredPaths = [];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+
+    const findings = await collectCleanupFindings(root);
+
+    expect(findings.some(finding => finding.key === 'promote-stale-live-path')).toBe(false);
+  });
+});
+
+describe('cleanup issue lifecycle', () => {
+  it('dedupes by stable marker before title fallback', () => {
+    const finding = {
+      key: 'candidate-stale-live-path',
+      title: 'Resolve candidate rule violations for stale-live-path',
+      category: 'candidate-rule' as const,
+      severity: 'medium' as const,
+      scope: 'stale-live-path',
+      suggestedVerification: 'rerun',
+      deterministicAutofixSafe: false,
+      evidence: [{ path: '.github/workflows/test.yml', detail: 'path-level evidence' }],
+    };
+    const actions = planIssueActions([finding], [
+      { number: 12, title: 'old title', body: `${issueMarker(finding)}\nold body` },
+    ]);
+
+    expect(actions[0]).toMatchObject({ action: 'update', issueNumber: 12 });
+    expect(actions[0].labels).toContain('quality-gc:candidate-rule');
+  });
+
+  it('plans close actions for stale cleanup issues whose findings disappeared', () => {
+    const actions = planIssueActions([], [
+      {
+        number: 99,
+        title: '[Quality GC Cleanup][tracked-artifact-tmp-old-log] Remove tracked local artifact',
+        body: '<!-- quality-gc-cleanup:tracked-artifact-tmp-old-log -->\nold finding',
+      },
+    ]);
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        action: 'close',
+        issueNumber: 99,
+      }),
+    ]);
+  });
+
+  it('plans minimum Quality GC labels', () => {
+    const actions = planLabelActions(['cleanup']);
+
+    expect(actions.filter(action => action.action === 'create').map(action => action.name)).toEqual([
+      'quality-gc',
+      'quality-gc:candidate-rule',
+      'quality-gc:tracked-artifact',
+      'quality-gc:promotion',
+    ]);
+  });
+
+  it('uses path-level evidence for credential-shaped tracked artifacts', async () => {
+    const root = createNpmRepo();
+    writeText(path.join(root, 'tmp/.env.local'), 'TOKEN=super-secret\n');
+    requireSuccessfulCommand('git', ['add', 'tmp/.env.local'], { cwd: root });
+    const findings = await collectCleanupFindings(root);
+    const body = JSON.stringify(findings);
+
+    expect(body).toContain('tmp/.env.local');
+    expect(body).not.toContain('super-secret');
+    expect(body).toContain('contents were not read');
+  });
+});
+
+describe('workflow and skill installer contracts', () => {
+  it('keeps cleanup workflow dry-run by default and scopes write permissions', () => {
+    const workflow = cleanupScanWorkflow();
+
+    expect(workflow).toContain('default: true');
+    expect(workflow).toContain('cache: npm');
+    expect(workflow).toContain('run: npm ci');
+    expect(workflow).toContain('contents: read');
+    expect(workflow).toContain('issues: write');
+    expect(workflow).toContain(
+      "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)",
+    );
+    expect(workflow).not.toContain('write-all');
+  });
+
+  it('installs Codex and Claude Code skills into temp homes only with apply', () => {
+    const root = createNpmRepo();
+    const home = tempDir('quality-gc-home-');
+    const codexPlan = createSkillInstallPlan({ target: 'codex', scope: 'user', root, home });
+    const claudePlan = createSkillInstallPlan({ target: 'claude-code', scope: 'project', root, home });
+
+    expect(fileExists(codexPlan.files[0].destination)).toBe(false);
+    expect(fileExists(claudePlan.files[0].destination)).toBe(false);
+
+    applySkillInstallPlan(codexPlan);
+    applySkillInstallPlan(claudePlan);
+
+    expect(readText(codexPlan.files[0].destination)).toContain('quality-gc');
+    expect(readText(claudePlan.files[0].destination)).toContain('quality-gc');
+  });
+
+  it('maps postinstall terminal choices without prompting in CI', () => {
+    expect(normalizePostinstallChoice('1')).toBe('codex');
+    expect(normalizePostinstallChoice('2')).toBe('claude-code');
+    expect(normalizePostinstallChoice('3')).toBe('both');
+    expect(normalizePostinstallChoice('4')).toBe('skip');
+    expect(targetsForChoice('both')).toEqual(['codex', 'claude-code']);
+    expect(shouldPromptForSkillInstall({ CI: 'true' }, true, true)).toBe(false);
+    expect(shouldPromptForSkillInstall({}, false, true)).toBe(false);
+    expect(shouldPromptForSkillInstall({}, true, true)).toBe(true);
+  });
+});
