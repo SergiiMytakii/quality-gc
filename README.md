@@ -100,12 +100,13 @@ Install Quality GC production-ready for this repo. Start with preview mode and d
 The expected flow is:
 
 1. The agent inspects the repository.
-2. The agent runs preview commands.
-3. You review the plan.
-4. You approve apply.
-5. The agent creates a setup branch.
-6. The agent applies setup, runs checks, commits, pushes, and opens a PR.
-7. After merge, you approve a live Cleanup Scan issue-write proof.
+2. If the package is missing, the agent installs it as a dev dependency with the repository package manager.
+3. The agent runs preview commands through `npx quality-gc` or `pnpm exec quality-gc`.
+4. You review the plan.
+5. You approve apply.
+6. The agent creates a setup branch.
+7. The agent applies setup, runs checks, commits, pushes, and opens a PR.
+8. After merge, you approve a live Cleanup Scan issue-write proof.
 
 ## Manual Setup Without An Agent
 
