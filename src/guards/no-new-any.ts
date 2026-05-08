@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 import { listFiles, readJson, readText, relativePosix, writeJson } from '../util/fs.js';
 import type { Violation } from '../util/result.js';
 import { DEFAULT_NO_NEW_ANY_INCLUDE } from '../config/schema.js';
@@ -51,9 +52,23 @@ function matchesAny(relativePath: string, patterns: string[]): boolean {
   return patterns.some(pattern => globToRegExp(pattern).test(relativePath));
 }
 
-export function countExplicitAny(content: string): number {
-  const matches = content.match(/(:\s*any\b|\bas\s+any\b|<\s*any\s*>)/g);
-  return matches?.length ?? 0;
+function scriptKindForFile(filePath: string): ts.ScriptKind {
+  return filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+}
+
+export function countExplicitAny(content: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS): number {
+  const sourceFile = ts.createSourceFile('source.ts', content, ts.ScriptTarget.Latest, true, scriptKind);
+  let count = 0;
+
+  function visit(node: ts.Node): void {
+    if (node.kind === ts.SyntaxKind.AnyKeyword) {
+      count += 1;
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return count;
 }
 
 export function collectAnyCounts(
@@ -70,7 +85,7 @@ export function collectAnyCounts(
       continue;
     }
 
-    const count = countExplicitAny(readText(filePath));
+    const count = countExplicitAny(readText(filePath), scriptKindForFile(filePath));
     if (count > 0) {
       counts[relativePath] = count;
     }

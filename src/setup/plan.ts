@@ -9,11 +9,12 @@ import {
   PACKAGE_VERSION,
   defaultConfig,
   renderConfig,
+  type QualityGcConfig,
 } from '../config/schema.js';
 import type { PlannedTextFile } from '../files/managed-block.js';
 import { planManagedTextFile, planOwnedTextFile } from '../files/managed-block.js';
 import { planPackageJsonUpdate } from '../files/package-json.js';
-import { createNoNewAnyBaseline } from '../guards/no-new-any.js';
+import { collectAnyCounts, createNoNewAnyBaseline, type NoNewAnyBaseline } from '../guards/no-new-any.js';
 import { architectureWorkflow, cleanupScanWorkflow, docsContent } from '../workflows/templates.js';
 import type { WorkflowPackageManager } from '../workflows/templates.js';
 
@@ -155,29 +156,26 @@ export function createSetupPlan(root: string, options: { packageSource?: string 
 export async function createMigrationPlan(root: string, options: { packageSource?: string } = {}): Promise<SetupPlan> {
   const packageSource = options.packageSource ?? defaultPackageSource();
   const packageManager = detectPackageManager(root);
-  const config = createConfigForRoot(root);
+  const inferredConfig = createConfigForRoot(root);
   const configPath = path.join(root, CONFIG_FILE);
-  const configChange: PlannedTextFile = fileExists(configPath)
+  const currentConfig = fileExists(configPath) ? await loadConfigForMigration(configPath) : null;
+  const migratedConfig = currentConfig ? migrateConfig(currentConfig, inferredConfig) : inferredConfig;
+  const configChange: PlannedTextFile = currentConfig
     ? {
         path: CONFIG_FILE,
         action: 'update',
         reason: `update Quality GC installedVersion to ${PACKAGE_VERSION}`,
-        content: await renderMigratedConfig(configPath, config),
+        content: renderConfig(migratedConfig),
       }
-    : planOwnedTextFile(root, CONFIG_FILE, renderConfig(config), 'create Quality GC source-of-truth config');
+    : planOwnedTextFile(root, CONFIG_FILE, renderConfig(migratedConfig), 'create Quality GC source-of-truth config');
 
   const baselinePath = path.join(root, NO_NEW_ANY_BASELINE_FILE);
   const baseline = createNoNewAnyBaseline(root, {
-    include: config.rules.noNewAny.include,
-    exclude: config.rules.noNewAny.exclude,
+    include: migratedConfig.rules.noNewAny.include,
+    exclude: migratedConfig.rules.noNewAny.exclude,
   });
   const baselineChange: PlannedTextFile = fileExists(baselinePath)
-    ? {
-        path: NO_NEW_ANY_BASELINE_FILE,
-        action: 'noop',
-        reason: 'preserve existing accepted no-new-any baseline',
-        content: readText(baselinePath),
-      }
+    ? createMergedMigrationBaseline(root, baselinePath, currentConfig, migratedConfig)
     : planOwnedTextFile(root, NO_NEW_ANY_BASELINE_FILE, `${JSON.stringify(baseline, null, 2)}\n`, 'create accepted no-new-any baseline');
 
   return {
@@ -206,7 +204,7 @@ export async function createMigrationPlan(root: string, options: { packageSource
   };
 }
 
-async function renderMigratedConfig(configPath: string, inferredConfig: ReturnType<typeof defaultConfig>): Promise<string> {
+async function loadConfigForMigration(configPath: string): Promise<QualityGcConfig> {
   const moduleUrl = pathToFileURL(configPath);
   moduleUrl.search = `mtime=${Date.now()}`;
   const loaded = (await import(moduleUrl.href)) as { default?: unknown };
@@ -215,7 +213,11 @@ async function renderMigratedConfig(configPath: string, inferredConfig: ReturnTy
     throw new Error('Cannot migrate Quality GC config without schemaVersion: 1.');
   }
 
-  const migrated = current as ReturnType<typeof defaultConfig>;
+  return current as QualityGcConfig;
+}
+
+function migrateConfig(current: QualityGcConfig, inferredConfig: ReturnType<typeof defaultConfig>): QualityGcConfig {
+  const migrated = structuredClone(current);
   const noNewAny = migrated.rules.noNewAny;
   if (
     sameStringArray(noNewAny.include, DEFAULT_NO_NEW_ANY_INCLUDE) &&
@@ -230,10 +232,48 @@ async function renderMigratedConfig(configPath: string, inferredConfig: ReturnTy
     noNewAny.exclude = [...inferredConfig.rules.noNewAny.exclude];
   }
 
-  return renderConfig({
+  return {
     ...migrated,
     installedVersion: PACKAGE_VERSION,
+  };
+}
+
+function createMergedMigrationBaseline(
+  root: string,
+  baselinePath: string,
+  previousConfig: QualityGcConfig | null,
+  migratedConfig: QualityGcConfig,
+): PlannedTextFile {
+  const existingText = readText(baselinePath);
+  const existing = JSON.parse(existingText) as NoNewAnyBaseline;
+  const previousCounts = previousConfig
+    ? collectAnyCounts(root, {
+        include: previousConfig.rules.noNewAny.include,
+        exclude: previousConfig.rules.noNewAny.exclude,
+      })
+    : {};
+  const migratedCounts = collectAnyCounts(root, {
+    include: migratedConfig.rules.noNewAny.include,
+    exclude: migratedConfig.rules.noNewAny.exclude,
   });
+  const merged: NoNewAnyBaseline = {
+    ...existing,
+    files: { ...existing.files },
+  };
+
+  for (const [file, count] of Object.entries(migratedCounts)) {
+    if (merged.files[file] === undefined && previousCounts[file] === undefined) {
+      merged.files[file] = count;
+    }
+  }
+
+  const content = `${JSON.stringify(merged, null, 2)}\n`;
+  return {
+    path: NO_NEW_ANY_BASELINE_FILE,
+    action: content === existingText ? 'noop' : 'update',
+    reason: content === existingText ? 'preserve existing accepted no-new-any baseline' : 'add baseline counts for newly scanned files',
+    content,
+  };
 }
 
 export function summarizePlan(plan: SetupPlan): string {

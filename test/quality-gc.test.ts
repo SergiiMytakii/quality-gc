@@ -2,16 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { validateConfig } from '../src/config/load.js';
+import { loadConfig, validateConfig } from '../src/config/load.js';
 import { defaultConfig, PACKAGE_VERSION, renderConfig } from '../src/config/schema.js';
 import { main } from '../src/cli.js';
 import { collectCleanupFindings } from '../src/commands/cleanup-scan.js';
 import { runGuardrailsCommand } from '../src/commands/run.js';
+import { evaluateArchitecture } from '../src/guards/architecture.js';
 import { issueMarker, planIssueActions } from '../src/github/issues.js';
 import { planLabelActions } from '../src/github/labels.js';
 import { createMigrationPlan, createSetupPlan } from '../src/setup/plan.js';
 import { applySetupPlan } from '../src/setup/apply.js';
-import { writeNoNewAnyBaseline, evaluateNoNewAny } from '../src/guards/no-new-any.js';
+import { writeNoNewAnyBaseline, evaluateNoNewAny, countExplicitAny } from '../src/guards/no-new-any.js';
 import { cleanupScanWorkflow } from '../src/workflows/templates.js';
 import { createSkillInstallPlan, applySkillInstallPlan } from '../src/skills/install.js';
 import { normalizePostinstallChoice, shouldPromptForSkillInstall, targetsForChoice } from '../src/postinstall.js';
@@ -280,6 +281,36 @@ describe('setup and migrate safety', () => {
     expect(configChange?.content).not.toContain('"src/**/*.{ts,tsx}"');
     expect(baseline.files).toEqual({ 'apps/web/src/index.ts': 1 });
   });
+
+  it('adds baseline counts for newly scanned files during migration', async () => {
+    const root = createNpmRepoWithoutSource();
+    writeText(path.join(root, 'apps/web/src/index.ts'), 'export const value: any = "legacy";\n');
+    const legacyConfig = defaultConfig('0.1.2');
+    legacyConfig.rules.noNewAny.include = ['src/**/*.{ts,tsx}'];
+    legacyConfig.rules.noNewAny.exclude = [
+      'src/**/__tests__/**',
+      'src/**/*.spec.ts',
+      'src/**/*.spec.tsx',
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/scripts/**',
+    ];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(legacyConfig));
+    writeText(
+      path.join(root, '.quality-gc/no-new-any-baseline.json'),
+      `${JSON.stringify({ schemaVersion: 1, description: 'old baseline', files: {} }, null, 2)}\n`,
+    );
+
+    const plan = await createMigrationPlan(root);
+    const baselineChange = plan.changes.find(change => change.path === '.quality-gc/no-new-any-baseline.json');
+    const baseline = JSON.parse(baselineChange?.content ?? '{}') as { files: Record<string, number> };
+
+    expect(baselineChange?.action).toBe('update');
+    expect(baseline.files).toEqual({ 'apps/web/src/index.ts': 1 });
+
+    applySetupPlan(plan);
+    await expect(loadConfig(root).then(config => evaluateNoNewAny(root, config))).resolves.toEqual([]);
+  });
 });
 
 describe('CLI output contracts', () => {
@@ -303,6 +334,19 @@ describe('guardrail adoption model', () => {
     expect(evaluateNoNewAny(root, config)).toHaveLength(1);
   });
 
+  it('counts real TypeScript any nodes without counting comments or strings', () => {
+    const content = [
+      '// TODO: remove as any from this note',
+      'const label = "value: any";',
+      'const value: Record<string, any> = {};',
+      'const items: Promise<any[]> = Promise.resolve([]);',
+      'const cast = value as any;',
+      'const legacyCast = <any>value;',
+    ].join('\n');
+
+    expect(countExplicitAny(content)).toBe(4);
+  });
+
   it('honors no-new-any include and exclude config', () => {
     const root = createNpmRepo();
     writeText(path.join(root, 'src/index.ts'), 'export const value: any = "covered";\n');
@@ -314,6 +358,36 @@ describe('guardrail adoption model', () => {
     const violations = evaluateNoNewAny(root, config);
 
     expect(violations).toEqual([expect.objectContaining({ path: 'src/index.ts' })]);
+  });
+
+  it('detects architecture violations in multiline imports', () => {
+    const root = createNpmRepo();
+    writeText(
+      path.join(root, 'src/index.ts'),
+      [
+        'import {',
+        '  forbidden',
+        "} from './infra/forbidden';",
+        'export const value = forbidden;',
+      ].join('\n'),
+    );
+    writeText(path.join(root, 'src/infra/forbidden.ts'), 'export const forbidden = "bad";\n');
+    const config = defaultConfig();
+    config.rules.architecture.boundaries = [
+      {
+        from: ['src'],
+        disallowImportsFrom: ['src/infra'],
+        message: 'src must not import infra',
+      },
+    ];
+
+    expect(evaluateArchitecture(root, config)).toEqual([
+      expect.objectContaining({
+        path: 'src/index.ts',
+        line: 1,
+        detail: 'src must not import infra',
+      }),
+    ]);
   });
 
   it('keeps candidate violations advisory for quality-gc run', async () => {
@@ -448,6 +522,33 @@ describe('workflow and skill installer contracts', () => {
 
     expect(readText(codexPlan.files[0].destination)).toContain('quality-gc');
     expect(readText(claudePlan.files[0].destination)).toContain('quality-gc');
+  });
+
+  it('installs Codex project-scoped skills into the target repository', () => {
+    const root = createNpmRepo();
+    const home = tempDir('quality-gc-home-');
+    const plan = createSkillInstallPlan({ target: 'codex', scope: 'project', root, home });
+
+    expect(plan.files[0].destination).toBe(path.join(root, '.codex/skills/quality-gc-setup-agent/SKILL.md'));
+    expect(plan.files[0]).toMatchObject({ action: 'create', available: true });
+
+    applySkillInstallPlan(plan);
+    expect(fileExists(path.join(home, '.codex/skills/quality-gc-setup-agent/SKILL.md'))).toBe(false);
+    expect(readText(plan.files[0].destination)).toContain('quality-gc');
+  });
+
+  it('refuses to overwrite existing skill files without explicit permission', () => {
+    const root = createNpmRepo();
+    const home = tempDir('quality-gc-home-');
+    const plan = createSkillInstallPlan({ target: 'codex', scope: 'user', root, home });
+    writeText(plan.files[0].destination, '# local custom skill\n');
+    const conflictPlan = createSkillInstallPlan({ target: 'codex', scope: 'user', root, home });
+
+    expect(conflictPlan.files[0]).toMatchObject({ action: 'conflict' });
+    expect(() => applySkillInstallPlan(conflictPlan)).toThrow(/Refusing to overwrite/);
+
+    applySkillInstallPlan(conflictPlan, { overwrite: true });
+    expect(readText(conflictPlan.files[0].destination)).toContain('quality-gc');
   });
 
   it('maps postinstall terminal choices without prompting in CI', () => {
