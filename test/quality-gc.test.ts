@@ -14,6 +14,7 @@ import { applySetupPlan } from '../src/setup/apply.js';
 import { writeNoNewAnyBaseline, evaluateNoNewAny } from '../src/guards/no-new-any.js';
 import { cleanupScanWorkflow } from '../src/workflows/templates.js';
 import { createSkillInstallPlan, applySkillInstallPlan } from '../src/skills/install.js';
+import { normalizePostinstallChoice, shouldPromptForSkillInstall, targetsForChoice } from '../src/postinstall.js';
 import { fileExists, readJson, readText, writeText } from '../src/util/fs.js';
 import { requireSuccessfulCommand } from '../src/util/exec.js';
 
@@ -309,5 +310,16 @@ describe('workflow and skill installer contracts', () => {
 
     expect(readText(codexPlan.files[0].destination)).toContain('quality-gc');
     expect(readText(claudePlan.files[0].destination)).toContain('quality-gc');
+  });
+
+  it('maps postinstall terminal choices without prompting in CI', () => {
+    expect(normalizePostinstallChoice('1')).toBe('codex');
+    expect(normalizePostinstallChoice('2')).toBe('claude-code');
+    expect(normalizePostinstallChoice('3')).toBe('both');
+    expect(normalizePostinstallChoice('4')).toBe('skip');
+    expect(targetsForChoice('both')).toEqual(['codex', 'claude-code']);
+    expect(shouldPromptForSkillInstall({ CI: 'true' }, true, true)).toBe(false);
+    expect(shouldPromptForSkillInstall({}, false, true)).toBe(false);
+    expect(shouldPromptForSkillInstall({}, true, true)).toBe(true);
   });
 });

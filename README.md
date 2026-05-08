@@ -46,7 +46,7 @@ When a repository has an `origin/HEAD`, apply mode refuses to write on the defau
 For npm projects:
 
 ```sh
-npm install -D quality-gc
+npm install -D quality-gc --foreground-scripts
 ```
 
 For pnpm workspaces:
@@ -55,9 +55,24 @@ For pnpm workspaces:
 pnpm add -D -w quality-gc
 ```
 
+During interactive installs, `quality-gc` offers to install the setup-agent skill for Codex, Claude Code, both, or neither.
+
+If your package manager hides lifecycle prompts, install the package first and then run one of the commands below. You can also make the install non-interactive:
+
+```sh
+QUALITY_GC_INSTALL_SKILL=codex npm install -D quality-gc --foreground-scripts
+QUALITY_GC_INSTALL_SKILL=claude-code npm install -D quality-gc --foreground-scripts
+QUALITY_GC_INSTALL_SKILL=both npm install -D quality-gc --foreground-scripts
+QUALITY_GC_INSTALL_SKILL=skip npm install -D quality-gc
+QUALITY_GC_INSTALL_SKILL=codex pnpm add -D -w quality-gc
+QUALITY_GC_INSTALL_SKILL=claude-code pnpm add -D -w quality-gc
+```
+
 Do not use `npm install` inside a pnpm workspace with an existing pnpm-managed `node_modules`; npm can fail while trying to read pnpm symlinks.
 
-### 2. Install A Setup Agent Skill
+### 2. Install A Setup Agent Skill Manually
+
+If you skipped the install prompt or your package manager did not expose it, install a skill manually.
 
 For Codex:
 
