@@ -10,10 +10,10 @@ You install and run `quality-gc` through the target repository's package manager
 Before running any `quality-gc` command:
 
 1. Detect the package manager from `packageManager`, lockfiles, and workspace files.
-2. If `quality-gc` is not installed, install it as a dev dependency:
-   - npm: `npm install -D quality-gc`
-   - pnpm workspace: `pnpm add -D -w quality-gc`
-   - pnpm package: `pnpm add -D quality-gc`
+2. If `quality-gc` is not installed, install it as a dev dependency and install this skill in the same step:
+   - npm + Codex: `QUALITY_GC_INSTALL_SKILL=codex npm install -D quality-gc --foreground-scripts`
+   - pnpm workspace + Codex: `QUALITY_GC_INSTALL_SKILL=codex pnpm add -D -w quality-gc`
+   - pnpm package + Codex: `QUALITY_GC_INSTALL_SKILL=codex pnpm add -D quality-gc`
 3. Use the package-manager runner instead of assuming a global binary:
    - npm: `npx quality-gc ...`
    - pnpm: `pnpm exec quality-gc ...`
@@ -21,13 +21,11 @@ Before running any `quality-gc` command:
 Workflow:
 
 1. Inspect repository shape, package manager, GitHub remote, and current branch. Do not read or quote secret file contents; use path-level evidence only for `.env`, credential, token, or secret-shaped files.
-2. Run preview commands first:
-   - npm: `npx quality-gc setup --root .`
-   - npm: `npx quality-gc install-skill --target codex --scope project --root .`
-   - npm: `npx quality-gc cleanup-scan --root . --dry-run`
-   - pnpm: `pnpm exec quality-gc setup --root .`
-   - pnpm: `pnpm exec quality-gc install-skill --target codex --scope project --root .`
-   - pnpm: `pnpm exec quality-gc cleanup-scan --root . --dry-run`
+2. Run preview commands first and parse their JSON instead of summarizing raw CLI prose:
+   - npm: `npx quality-gc setup --root . --json`
+   - npm: `npx quality-gc cleanup-scan --root . --dry-run --json`
+   - pnpm: `pnpm exec quality-gc setup --root . --json`
+   - pnpm: `pnpm exec quality-gc cleanup-scan --root . --dry-run --json`
 3. Present the plan/diff and ask for approval before any writes.
 4. After approval, create a dedicated setup branch, run setup with `--apply` through the package-manager runner, install the selected skill, run local checks, commit, push, and open a PR.
 5. Run `quality-gc labels --repo <owner/name>` through the package-manager runner first, then run it with `--apply` after approval to create missing Quality GC labels before live issue write.
@@ -35,32 +33,42 @@ Workflow:
 
 Communication contract:
 
-- Speak to the user as an end user, not as an implementer reading logs.
+- Speak to the user as an end user, not as an implementer reading logs. Respond in the same language the user uses, unless the user asks for another language.
 - Do not expose internal phrasing such as "working tree", "package cache", "runner", "apply not launched", or raw CLI plan dumps unless the user asks for details.
+- Do not say only that version metadata will be applied. Explain the user-facing effect. If the only change is `installedVersion`, say: `Guardrail behavior will not change; apply only updates the stale installedVersion marker in the local Quality GC config. You can skip it if you do not want a PR only for metadata.`
+- If there are zero findings, still report exactly what was checked and what was not configured. `0 findings` is not enough.
 - Always summarize in this shape:
-  1. `Что я проверил` - one or two user-visible facts.
-  2. `Что будет добавлено` - short plain-language list.
-  3. `Что не изменится без разрешения` - reassure that source files, workflows, labels, and PRs are not changed yet.
-  4. `Следующий шаг` - one explicit approval sentence.
-- If package installation is needed, say plainly: `В этом проекте пакет quality-gc еще не установлен. Я добавлю его как dev-зависимость через <npm|pnpm>, затем покажу план установки.`
-- If preview is ready, do not say only "apply". Ask for a user-facing confirmation: `Если план подходит, напишите: Разрешаю установить Quality GC.`
-- Mention existing unrelated repository changes only when they affect setup safety. Phrase it as: `Я вижу уже существующие изменения в package.json и lockfile; я не буду их перезаписывать.`
+  1. `What I checked` - package manager, installed `quality-gc` version, GitHub repo, and secret handling.
+  2. `What Quality GC actually covers` - include the exact no-new-any source roots, baseline explicit-any count, architecture boundary count, cleanup artifact roots, and cleanup findings count by category.
+  3. `What is not covered or needs a decision` - say when architecture boundaries are empty, when no-new-any scans no files, when cleanup only checks tracked artifacts, or when live issue-write cannot be proven before merge.
+  4. `What apply will change` - list exact file/workflow/label/config effects. If the effect is only metadata, say so plainly.
+  5. `Next step` - one explicit approval sentence, or say no apply is needed if there is nothing useful to write.
+- If package installation is needed, say plainly: `The quality-gc package is not installed in this project yet. I will add it as a dev dependency with <npm|pnpm>, then show the setup preview.`
+- If preview is ready, do not say only "apply". Ask for a user-facing confirmation: `If this plan is acceptable, reply: Approve installing Quality GC.`
+- Mention existing unrelated repository changes only when they affect setup safety. Phrase it as: `I see existing package.json and lockfile changes; I will not overwrite them.`
+- Never ask the user to approve apply without explaining whether it changes guardrail behavior, opens/updates issues, writes workflows, writes labels, or only updates metadata.
 
 Good preview message:
 
 ```text
-Проверил проект: это pnpm workspace, GitHub repo найден, секретные файлы не читал.
+What I checked
+The project uses a pnpm workspace, quality-gc 0.1.4 is installed, and the GitHub repo is available. I did not read secret file contents.
 
-Quality GC добавит:
-- локальную конфигурацию проверок;
-- команды для запуска guardrails;
-- GitHub Actions для architecture check и weekly cleanup scan;
-- Codex setup skill;
-- GitHub labels для будущих cleanup issues.
+What Quality GC actually covers
+- no-new-any scans apps/**/*.{ts,tsx} and packages/**/*.{ts,tsx}; the current explicit-any baseline is 0.
+- architecture check is enabled, but boundaries are 0, so it runs but cannot find architecture violations until rules are configured.
+- cleanup scan checks git-tracked files in .tmp, tmp, logs, and output; findings: 0.
 
-Сейчас ничего не применено: файлы, labels, branch и PR еще не созданы.
+What is not covered or needs a decision
+- Architecture boundaries must be configured from the real project architecture; frontend/backend/shared restrictions cannot be guessed safely.
+- Untracked local tmp files are not violations unless they are committed to git.
 
-Если план подходит, напишите: Разрешаю установить Quality GC.
+What apply will change
+- It will create or update the .quality-gc config, baseline, package scripts, and GitHub workflows.
+- If the preview only shows installedVersion, guardrail behavior will not change; that is a metadata update and can be skipped.
+
+Next step
+If you want to apply these exact changes, reply: Approve installing Quality GC.
 ```
 
 Reject broad cleanup refactors, direct default-branch writes, permanent allowlists for discovered violations, and broad GitHub permissions.
