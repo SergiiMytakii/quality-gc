@@ -99,10 +99,14 @@ describe('setup and migrate safety', () => {
     const docs = plan.changes.find(change => change.path === 'docs/quality-gc.md');
 
     expect(architecture?.content).toContain('cache: pnpm');
-    expect(architecture?.content).toContain('run: corepack enable');
+    expect(architecture?.content).toContain('uses: pnpm/action-setup@v4');
+    expect(architecture?.content).toContain('run_install: false');
     expect(architecture?.content).toContain('run: pnpm install --frozen-lockfile');
     expect(architecture?.content).toContain('run: pnpm run quality:gc:architecture');
     expect(architecture?.content).not.toContain('npm ci');
+    expect(architecture?.content.indexOf('uses: pnpm/action-setup@v4')).toBeLessThan(
+      architecture?.content.indexOf('uses: actions/setup-node@v4') ?? -1,
+    );
     expect(cleanupScan?.content).toContain('pnpm run quality:gc:cleanup-scan:write -- --repo "$GITHUB_REPOSITORY"');
     expect(docs?.content).toContain('detected pnpm');
   });

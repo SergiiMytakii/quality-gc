@@ -2,16 +2,18 @@ export type WorkflowPackageManager = 'npm' | 'pnpm';
 
 function workflowRuntime(packageManager: WorkflowPackageManager): {
   cache: WorkflowPackageManager;
-  corepackStep: string;
+  packageManagerSetupStep: string;
   installCommand: string;
   runCommand: (script: string) => string;
 } {
   if (packageManager === 'pnpm') {
     return {
       cache: 'pnpm',
-      corepackStep: `
-      - name: Enable Corepack
-        run: corepack enable
+      packageManagerSetupStep: `
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
 `,
       installCommand: 'pnpm install --frozen-lockfile',
       runCommand: script => `pnpm run ${script}`,
@@ -20,7 +22,7 @@ function workflowRuntime(packageManager: WorkflowPackageManager): {
 
   return {
     cache: 'npm',
-    corepackStep: '\n',
+    packageManagerSetupStep: '\n',
     installCommand: 'npm ci',
     runCommand: script => `npm run ${script}`,
   };
@@ -47,13 +49,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+${runtime.packageManagerSetupStep}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: ${runtime.cache}
-${runtime.corepackStep}
+
       - name: Install dependencies
         run: ${runtime.installCommand}
 
@@ -88,13 +90,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+${runtime.packageManagerSetupStep}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: ${runtime.cache}
-${runtime.corepackStep}
+
       - name: Install dependencies
         run: ${runtime.installCommand}
 
