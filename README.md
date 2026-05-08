@@ -256,6 +256,7 @@ Publish behavior:
 - If `NPM_TOKEN` is not configured, publish is skipped with a workflow warning.
 - If that exact version already exists on npm, publish is skipped.
 - If the version does not exist on npm, GitHub Actions runs `npm publish --access public`.
+- The same workflow can also be run manually from GitHub Actions; manual runs use the same "publish only if this version is new" check.
 
 To release a new package version, bump `package.json` and `package-lock.json`, commit to `main`, and push. Documentation-only or workflow-only pushes with an already-published version will not republish.
 
