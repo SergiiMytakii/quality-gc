@@ -1,6 +1,12 @@
 import process from 'node:process';
 import readline from 'node:readline/promises';
-import { applySkillInstallPlan, createSkillInstallPlan, type SkillScope, type SkillTarget } from '../skills/install.js';
+import {
+  applySkillInstallPlan,
+  createSkillInstallPlan,
+  writeSkillUpdateReport,
+  type SkillScope,
+  type SkillTarget,
+} from '../skills/install.js';
 
 export interface InstallSkillCommandOptions {
   target: SkillTarget;
@@ -13,7 +19,7 @@ export interface InstallSkillCommandOptions {
 
 async function confirmOverwrite(destinations: string[]): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error('Refusing to overwrite existing skill files without interactive confirmation.');
+    return false;
   }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -57,8 +63,18 @@ export async function runInstallSkillCommand(options: InstallSkillCommandOptions
 
   const overwrite = conflicts.length > 0 ? await confirmOverwrite(conflicts.map(file => file.destination)) : false;
   if (conflicts.length > 0 && !overwrite) {
-    console.log('Skill install cancelled; existing files were left unchanged.');
-    return 1;
+    const reportPath = writeSkillUpdateReport(plan, options.root);
+    const written = applySkillInstallPlan(plan, { skipConflicts: true });
+    if (!options.json) {
+      console.log('Existing skill files were left unchanged.');
+      if (written.length > 0) {
+        console.log(`Installed non-conflicting Quality GC skill files: ${written.join(', ')}`);
+      }
+      if (reportPath) {
+        console.log(`Skill update report written: ${reportPath}`);
+      }
+    }
+    return 0;
   }
 
   const written = applySkillInstallPlan(plan, { overwrite });

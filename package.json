@@ -1,7 +1,7 @@
 {
   "name": "quality-gc",
-  "version": "0.1.6",
-  "description": "Deterministic Quality GC guardrails and setup-agent installers for npm/GitHub repositories.",
+  "version": "0.1.7",
+  "description": "Deterministic Quality GC guardrails and setup-agent installers for JavaScript and TypeScript repositories.",
   "license": "MIT",
   "type": "module",
   "bin": {

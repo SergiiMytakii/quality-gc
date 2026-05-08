@@ -1,4 +1,4 @@
-export type WorkflowPackageManager = 'npm' | 'pnpm';
+export type WorkflowPackageManager = 'npm' | 'pnpm' | 'yarn';
 
 function workflowRuntime(packageManager: WorkflowPackageManager): {
   cache: WorkflowPackageManager;
@@ -17,6 +17,17 @@ function workflowRuntime(packageManager: WorkflowPackageManager): {
 `,
       installCommand: 'pnpm install --frozen-lockfile',
       runCommand: script => `pnpm run ${script}`,
+    };
+  }
+  if (packageManager === 'yarn') {
+    return {
+      cache: 'yarn',
+      packageManagerSetupStep: `
+      - name: Enable Corepack
+        run: corepack enable
+`,
+      installCommand: 'yarn install --frozen-lockfile',
+      runCommand: script => `yarn run ${script}`,
     };
   }
 
@@ -115,7 +126,7 @@ ${runtime.packageManagerSetupStep}
 }
 
 export function docsContent(packageManager: WorkflowPackageManager = 'npm'): string {
-  const runPrefix = packageManager === 'pnpm' ? 'pnpm run' : 'npm run';
+  const runPrefix = packageManager === 'pnpm' ? 'pnpm run' : packageManager === 'yarn' ? 'yarn run' : 'npm run';
 
   return `# Quality GC
 

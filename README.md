@@ -31,16 +31,18 @@ Setup adds:
 - `.quality-gc/no-new-any-baseline.json`
 - package scripts such as `quality:gc`, `quality:gc:architecture`, and `quality:gc:cleanup-scan:dry-run`
 - GitHub Actions workflows for architecture checks and cleanup scans
-- optional Codex or Claude Code setup skills
+- the Codex setup skill by default
 
-Mutating commands preview changes first. Apply mode refuses to overwrite unmanaged files and should normally run on a setup branch.
+If the Codex skill already exists and differs from the packaged version, `quality-gc` asks before updating it. If you skip the update, it writes `.quality-gc/skill-update-report.md` so you can review what changed.
+
+Mutating setup commands preview changes first. Apply mode refuses to overwrite unmanaged files and should normally run on a setup branch.
 
 ## Quick Start
 
 ### npm + Codex
 
 ```sh
-QUALITY_GC_INSTALL_SKILL=codex npm install -D quality-gc --foreground-scripts
+npm install -D quality-gc --foreground-scripts
 ```
 
 ### npm + Claude Code
@@ -52,13 +54,27 @@ QUALITY_GC_INSTALL_SKILL=claude-code npm install -D quality-gc --foreground-scri
 ### pnpm workspace + Codex
 
 ```sh
-QUALITY_GC_INSTALL_SKILL=codex pnpm add -D -w quality-gc
+pnpm add -D -w quality-gc --allow-build=quality-gc
 ```
 
 ### pnpm workspace + Claude Code
 
 ```sh
-QUALITY_GC_INSTALL_SKILL=claude-code pnpm add -D -w quality-gc
+QUALITY_GC_INSTALL_SKILL=claude-code pnpm add -D -w quality-gc --allow-build=quality-gc
+```
+
+pnpm v10 blocks dependency install scripts unless the package is allowed to build. The `--allow-build=quality-gc` flag is what lets `quality-gc` create or update the setup skill during install.
+
+### Yarn + Codex
+
+```sh
+yarn add -D quality-gc
+```
+
+### Yarn + Claude Code
+
+```sh
+QUALITY_GC_INSTALL_SKILL=claude-code yarn add -D quality-gc
 ```
 
 To skip skill installation:
@@ -71,6 +87,12 @@ For pnpm:
 
 ```sh
 QUALITY_GC_INSTALL_SKILL=skip pnpm add -D -w quality-gc
+```
+
+For Yarn:
+
+```sh
+QUALITY_GC_INSTALL_SKILL=skip yarn add -D quality-gc
 ```
 
 ## Recommended Setup With An Agent
@@ -122,6 +144,13 @@ pnpm exec quality-gc setup --root .
 pnpm exec quality-gc setup --root . --apply
 ```
 
+For Yarn, use:
+
+```sh
+yarn quality-gc setup --root .
+yarn quality-gc setup --root . --apply
+```
+
 After setup, run:
 
 ```sh
@@ -138,6 +167,15 @@ pnpm run quality:gc
 pnpm run quality:gc:architecture
 pnpm run quality:gc:architecture-drift
 pnpm run quality:gc:cleanup-scan:dry-run
+```
+
+For Yarn:
+
+```sh
+yarn run quality:gc
+yarn run quality:gc:architecture
+yarn run quality:gc:architecture-drift
+yarn run quality:gc:cleanup-scan:dry-run
 ```
 
 ## Architecture Rules
@@ -177,6 +215,13 @@ For pnpm:
 ```sh
 pnpm exec quality-gc labels --repo owner/repo
 pnpm exec quality-gc labels --repo owner/repo --apply
+```
+
+For Yarn:
+
+```sh
+yarn quality-gc labels --repo owner/repo
+yarn quality-gc labels --repo owner/repo --apply
 ```
 
 Labels used by Quality GC:

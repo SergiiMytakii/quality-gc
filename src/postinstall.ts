@@ -3,7 +3,12 @@ import fs from 'node:fs';
 import process from 'node:process';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { applySkillInstallPlan, createSkillInstallPlan, type SkillTarget } from './skills/install.js';
+import {
+  applySkillInstallPlan,
+  createSkillInstallPlan,
+  writeSkillUpdateReport,
+  type SkillTarget,
+} from './skills/install.js';
 
 type PostinstallChoice = 'codex' | 'claude-code' | 'both' | 'skip';
 
@@ -48,7 +53,7 @@ export function targetsForChoice(choice: PostinstallChoice): SkillTarget[] {
 }
 
 export function shouldPromptForSkillInstall(env: NodeJS.ProcessEnv, stdinIsTTY: boolean, stdoutIsTTY: boolean): boolean {
-  if (env.QUALITY_GC_INSTALL_SKILL) {
+  if (normalizePostinstallChoice(env.QUALITY_GC_INSTALL_SKILL) === 'skip') {
     return false;
   }
   if (env.CI === 'true' || env.QUALITY_GC_SKIP_POSTINSTALL === '1') {
@@ -84,12 +89,33 @@ async function promptForChoice(): Promise<PostinstallChoice> {
   }
 }
 
+async function promptForSkillUpdate(destinations: string[]): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log('\nQuality GC setup-agent skill already exists and differs from the packaged version.');
+    console.log('Update these files?');
+    for (const destination of destinations) {
+      console.log(`  - ${destination}`);
+    }
+    const answer = await rl.question('Update Quality GC skill? [y/N] ');
+    return answer.trim().toLowerCase() === 'y' || answer.trim().toLowerCase() === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
 function projectRoot(): string {
   return process.env.INIT_CWD ?? process.cwd();
 }
 
 function packageRunner(): string {
-  return process.env.npm_execpath?.includes('pnpm') ? 'pnpm exec quality-gc' : 'npx quality-gc';
+  if (process.env.npm_execpath?.includes('pnpm')) {
+    return 'pnpm exec quality-gc';
+  }
+  if (process.env.npm_execpath?.includes('yarn')) {
+    return 'yarn quality-gc';
+  }
+  return 'npx quality-gc';
 }
 
 function printManualInstructions(): void {
@@ -100,13 +126,24 @@ function printManualInstructions(): void {
   console.log(`  Claude Code: ${runner} install-skill --target claude-code --scope project --root . --apply`);
 }
 
+export function defaultPostinstallChoice(env: NodeJS.ProcessEnv): PostinstallChoice {
+  const envChoice = normalizePostinstallChoice(env.QUALITY_GC_INSTALL_SKILL);
+  if (envChoice) {
+    return envChoice;
+  }
+  if (env.CI === 'true' || env.QUALITY_GC_SKIP_POSTINSTALL === '1') {
+    return 'skip';
+  }
+  return 'codex';
+}
+
 export async function runPostinstall(): Promise<void> {
-  const envChoice = normalizePostinstallChoice(process.env.QUALITY_GC_INSTALL_SKILL);
-  const choice = envChoice ?? (canPrompt() ? await promptForChoice() : 'skip');
+  const explicitPrompt = process.env.QUALITY_GC_INSTALL_SKILL === 'prompt';
+  const choice = explicitPrompt && canPrompt() ? await promptForChoice() : defaultPostinstallChoice(process.env);
 
   const targets = targetsForChoice(choice);
   if (targets.length === 0) {
-    if (!process.env.QUALITY_GC_INSTALL_SKILL && process.env.CI !== 'true' && !canPrompt()) {
+    if (!process.env.QUALITY_GC_INSTALL_SKILL && process.env.CI !== 'true' && process.env.QUALITY_GC_SKIP_POSTINSTALL !== '1') {
       printManualInstructions();
     }
     return;
@@ -114,12 +151,33 @@ export async function runPostinstall(): Promise<void> {
 
   const root = projectRoot();
   const written: string[] = [];
+  const reports: string[] = [];
   for (const target of targets) {
     const plan = createSkillInstallPlan({ target, scope: 'project', root });
-    written.push(...applySkillInstallPlan(plan));
+    const conflicts = plan.files.filter(file => file.action === 'conflict');
+    const overwrite = conflicts.length > 0 && canPrompt() ? await promptForSkillUpdate(conflicts.map(file => file.destination)) : false;
+
+    if (conflicts.length > 0 && !overwrite) {
+      const reportPath = writeSkillUpdateReport(plan, root);
+      if (reportPath) {
+        reports.push(reportPath);
+      }
+      written.push(...applySkillInstallPlan(plan, { skipConflicts: true }));
+      continue;
+    }
+
+    written.push(...applySkillInstallPlan(plan, { overwrite }));
   }
 
-  console.log(`Quality GC skill installed: ${written.join(', ')}`);
+  if (written.length > 0) {
+    console.log(`Quality GC skill installed: ${written.join(', ')}`);
+  }
+  if (reports.length > 0) {
+    console.log(`Quality GC skill update report written: ${reports.join(', ')}`);
+  }
+  if (written.length === 0 && reports.length === 0) {
+    console.log('Quality GC skill is already up to date.');
+  }
 }
 
 function isEntrypoint(): boolean {

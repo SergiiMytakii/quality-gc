@@ -22,6 +22,12 @@ export interface SkillInstallFile {
 
 export interface ApplySkillInstallOptions {
   overwrite?: boolean;
+  skipConflicts?: boolean;
+}
+
+export interface SkillUpdateReport {
+  path: string;
+  content: string;
 }
 
 function homeDir(home?: string): string {
@@ -142,6 +148,9 @@ export function applySkillInstallPlan(plan: SkillInstallPlan, options: ApplySkil
     if (file.action === 'noop') {
       continue;
     }
+    if (file.action === 'conflict' && !options.overwrite && options.skipConflicts) {
+      continue;
+    }
     if (file.action === 'conflict' && !options.overwrite) {
       throw new Error(`Refusing to overwrite existing skill file without confirmation: ${file.destination}`);
     }
@@ -149,4 +158,74 @@ export function applySkillInstallPlan(plan: SkillInstallPlan, options: ApplySkil
     written.push(file.destination);
   }
   return written;
+}
+
+function relativeReportPath(destination: string, root: string): string {
+  const relative = path.relative(root, destination);
+  return relative.startsWith('..') ? destination : relative;
+}
+
+function renderChangedRangeDiff(before: string, after: string): string {
+  const beforeLines = before.split('\n');
+  const afterLines = after.split('\n');
+  let start = 0;
+  while (start < beforeLines.length && start < afterLines.length && beforeLines[start] === afterLines[start]) {
+    start += 1;
+  }
+
+  let beforeEnd = beforeLines.length - 1;
+  let afterEnd = afterLines.length - 1;
+  while (beforeEnd >= start && afterEnd >= start && beforeLines[beforeEnd] === afterLines[afterEnd]) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
+  }
+
+  const lines = [`@@ changed lines from ${start + 1} @@`];
+  for (let index = start; index <= beforeEnd; index += 1) {
+    lines.push(`-${beforeLines[index]}`);
+  }
+  for (let index = start; index <= afterEnd; index += 1) {
+    lines.push(`+${afterLines[index]}`);
+  }
+  return lines.join('\n');
+}
+
+export function createSkillUpdateReport(plan: SkillInstallPlan, root: string): SkillUpdateReport | null {
+  const conflicts = plan.files.filter(file => file.action === 'conflict');
+  if (conflicts.length === 0) {
+    return null;
+  }
+
+  const lines = [
+    '# Quality GC Skill Update',
+    '',
+    'Quality GC found an existing setup-agent skill that differs from the packaged version.',
+    'The existing files were left unchanged.',
+    '',
+    'Review the diff below, then run the install command again and approve the update if these changes look correct.',
+  ];
+
+  for (const file of conflicts) {
+    lines.push('', `## ${relativeReportPath(file.destination, root)}`, '', '```diff');
+    lines.push(`--- ${relativeReportPath(file.destination, root)}`);
+    lines.push(`+++ packaged quality-gc skill`);
+    lines.push(renderChangedRangeDiff(readText(file.destination), readText(file.source)));
+    lines.push('```');
+  }
+
+  return {
+    path: path.join(root, '.quality-gc', 'skill-update-report.md'),
+    content: `${lines.join('\n')}\n`,
+  };
+}
+
+export function writeSkillUpdateReport(plan: SkillInstallPlan, root: string): string | null {
+  const report = createSkillUpdateReport(plan, root);
+  if (!report) {
+    return null;
+  }
+
+  const content = fileExists(report.path) ? `${readText(report.path).trimEnd()}\n\n---\n\n${report.content}` : report.content;
+  writeText(report.path, content);
+  return report.path;
 }

@@ -15,8 +15,18 @@ import { createMigrationPlan, createSetupPlan } from '../src/setup/plan.js';
 import { applySetupPlan } from '../src/setup/apply.js';
 import { writeNoNewAnyBaseline, evaluateNoNewAny, countExplicitAny } from '../src/guards/no-new-any.js';
 import { cleanupScanWorkflow } from '../src/workflows/templates.js';
-import { createSkillInstallPlan, applySkillInstallPlan } from '../src/skills/install.js';
-import { normalizePostinstallChoice, shouldPromptForSkillInstall, targetsForChoice } from '../src/postinstall.js';
+import {
+  createSkillInstallPlan,
+  applySkillInstallPlan,
+  createSkillUpdateReport,
+  writeSkillUpdateReport,
+} from '../src/skills/install.js';
+import {
+  defaultPostinstallChoice,
+  normalizePostinstallChoice,
+  shouldPromptForSkillInstall,
+  targetsForChoice,
+} from '../src/postinstall.js';
 import { fileExists, readJson, readText, writeText } from '../src/util/fs.js';
 import { requireSuccessfulCommand } from '../src/util/exec.js';
 
@@ -65,6 +75,25 @@ function createPnpmRepo(): string {
     )}\n`,
   );
   writeText(path.join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+  return root;
+}
+
+function createYarnRepo(): string {
+  const root = createNpmRepo();
+  writeText(
+    path.join(root, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: 'fixture',
+        version: '1.0.0',
+        type: 'module',
+        packageManager: 'yarn@1.22.22',
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeText(path.join(root, 'yarn.lock'), '# yarn lockfile v1\n');
   return root;
 }
 
@@ -176,6 +205,24 @@ describe('setup and migrate safety', () => {
     );
     expect(cleanupScan?.content).toContain('pnpm run quality:gc:cleanup-scan:write -- --repo "$GITHUB_REPOSITORY"');
     expect(docs?.content).toContain('detected pnpm');
+  });
+
+  it('generates yarn GitHub workflows for yarn repositories', () => {
+    const root = createYarnRepo();
+    const plan = createSetupPlan(root);
+    const architecture = plan.changes.find(change => change.path === '.github/workflows/quality-gc-architecture.yml');
+    const cleanupScan = plan.changes.find(change => change.path === '.github/workflows/quality-gc-cleanup-scan.yml');
+    const docs = plan.changes.find(change => change.path === 'docs/quality-gc.md');
+
+    expect(architecture?.content).toContain('cache: yarn');
+    expect(architecture?.content).toContain('run: corepack enable');
+    expect(architecture?.content).toContain('run: yarn install --frozen-lockfile');
+    expect(architecture?.content).toContain('run: yarn run quality:gc:architecture');
+    expect(architecture?.content).toContain('run: yarn run quality:gc:architecture-drift');
+    expect(architecture?.content).not.toContain('npm ci');
+    expect(cleanupScan?.content).toContain('yarn run quality:gc:cleanup-scan:write -- --repo "$GITHUB_REPOSITORY"');
+    expect(docs?.content).toContain('detected yarn');
+    expect(docs?.content).toContain('yarn run quality:gc');
   });
 
   it('detects TypeScript source roots for repositories without root src', () => {
@@ -865,13 +912,75 @@ describe('workflow and skill installer contracts', () => {
     expect(readText(conflictPlan.files[0].destination)).toContain('quality-gc');
   });
 
-  it('maps postinstall terminal choices without prompting in CI', () => {
+  it('writes a skill update report when an existing skill is not overwritten', () => {
+    const root = createNpmRepo();
+    const home = tempDir('quality-gc-home-');
+    const plan = createSkillInstallPlan({ target: 'codex', scope: 'project', root, home });
+    writeText(plan.files[0].destination, '# local custom skill\n');
+    const conflictPlan = createSkillInstallPlan({ target: 'codex', scope: 'project', root, home });
+    const report = createSkillUpdateReport(conflictPlan, root);
+
+    expect(report?.path).toBe(path.join(root, '.quality-gc/skill-update-report.md'));
+    expect(report?.content).toContain('Quality GC found an existing setup-agent skill');
+    expect(report?.content).toContain('--- .codex/skills/quality-gc-setup-agent/SKILL.md');
+    expect(report?.content).toContain('-# local custom skill');
+    expect(report?.content).toContain('+name: quality-gc-setup-agent');
+
+    const reportPath = writeSkillUpdateReport(conflictPlan, root);
+    const written = applySkillInstallPlan(conflictPlan, { skipConflicts: true });
+
+    expect(reportPath).toBe(report?.path);
+    expect(readText(plan.files[0].destination)).toBe('# local custom skill\n');
+    expect(written).toContain(path.join(root, '.codex/skills/quality-gc-setup-agent/references/architecture-boundary-synthesis.md'));
+    expect(readText(reportPath ?? '')).toContain('packaged quality-gc skill');
+  });
+
+  it('keeps install-skill JSON output parseable when an update report is written', async () => {
+    const root = createNpmRepo();
+    writeText(path.join(root, '.codex/skills/quality-gc-setup-agent/SKILL.md'), '# local custom skill\n');
+
+    const result = await captureStdout(() =>
+      main(['install-skill', '--target', 'codex', '--scope', 'project', '--root', root, '--json', '--apply']),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(() => JSON.parse(result.stdout)).not.toThrow();
+    expect(fileExists(path.join(root, '.quality-gc/skill-update-report.md'))).toBe(true);
+    expect(readText(path.join(root, '.codex/skills/quality-gc-setup-agent/SKILL.md'))).toBe('# local custom skill\n');
+  });
+
+  it('appends multiple skill update reports instead of replacing the first diff', () => {
+    const root = createNpmRepo();
+    const home = tempDir('quality-gc-home-');
+    const codexPlan = createSkillInstallPlan({ target: 'codex', scope: 'project', root, home });
+    const claudePlan = createSkillInstallPlan({ target: 'claude-code', scope: 'project', root, home });
+    writeText(codexPlan.files[0].destination, '# local codex skill\n');
+    writeText(claudePlan.files[0].destination, '# local claude skill\n');
+
+    writeSkillUpdateReport(createSkillInstallPlan({ target: 'codex', scope: 'project', root, home }), root);
+    const reportPath = writeSkillUpdateReport(
+      createSkillInstallPlan({ target: 'claude-code', scope: 'project', root, home }),
+      root,
+    );
+    const reportText = readText(reportPath ?? '');
+
+    expect(reportText).toContain('-# local codex skill');
+    expect(reportText).toContain('-# local claude skill');
+    expect(reportText).toContain('---\n\n# Quality GC Skill Update');
+  });
+
+  it('maps postinstall defaults and terminal choices', () => {
     expect(normalizePostinstallChoice('1')).toBe('codex');
     expect(normalizePostinstallChoice('2')).toBe('claude-code');
     expect(normalizePostinstallChoice('3')).toBe('both');
     expect(normalizePostinstallChoice('4')).toBe('skip');
     expect(targetsForChoice('both')).toEqual(['codex', 'claude-code']);
+    expect(defaultPostinstallChoice({})).toBe('codex');
+    expect(defaultPostinstallChoice({ CI: 'true' })).toBe('skip');
+    expect(defaultPostinstallChoice({ QUALITY_GC_INSTALL_SKILL: 'skip' })).toBe('skip');
+    expect(defaultPostinstallChoice({ QUALITY_GC_INSTALL_SKILL: 'claude-code' })).toBe('claude-code');
     expect(shouldPromptForSkillInstall({ CI: 'true' }, true, true)).toBe(false);
+    expect(shouldPromptForSkillInstall({ QUALITY_GC_INSTALL_SKILL: 'skip' }, true, true)).toBe(false);
     expect(shouldPromptForSkillInstall({}, false, true)).toBe(false);
     expect(shouldPromptForSkillInstall({}, true, true)).toBe(true);
   });

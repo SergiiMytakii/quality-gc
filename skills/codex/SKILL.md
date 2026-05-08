@@ -10,13 +10,16 @@ You install and run `quality-gc` through the target repository's package manager
 Before running any `quality-gc` command:
 
 1. Detect the package manager from `packageManager`, lockfiles, and workspace files.
-2. If `quality-gc` is not installed, install it as a dev dependency and install this skill in the same step:
-   - npm + Codex: `QUALITY_GC_INSTALL_SKILL=codex npm install -D quality-gc --foreground-scripts`
-   - pnpm workspace + Codex: `QUALITY_GC_INSTALL_SKILL=codex pnpm add -D -w quality-gc`
-   - pnpm package + Codex: `QUALITY_GC_INSTALL_SKILL=codex pnpm add -D quality-gc`
+2. If `quality-gc` is not installed, install it as a dev dependency. The package installs the Codex project skill by default:
+   - npm + Codex: `npm install -D quality-gc --foreground-scripts`
+   - pnpm workspace + Codex: `pnpm add -D -w quality-gc --allow-build=quality-gc`
+   - pnpm package + Codex: `pnpm add -D quality-gc --allow-build=quality-gc`
+   - yarn + Codex: `yarn add -D quality-gc`
+   - To skip skill installation intentionally: `QUALITY_GC_INSTALL_SKILL=skip <install command>`
 3. Use the package-manager runner instead of assuming a global binary:
    - npm: `npx quality-gc ...`
    - pnpm: `pnpm exec quality-gc ...`
+   - yarn: `yarn quality-gc ...`
 
 Workflow:
 
@@ -26,6 +29,8 @@ Workflow:
    - npm: `npx quality-gc cleanup-scan --root . --dry-run --json`
    - pnpm: `pnpm exec quality-gc setup --root . --json`
    - pnpm: `pnpm exec quality-gc cleanup-scan --root . --dry-run --json`
+   - yarn: `yarn quality-gc setup --root . --json`
+   - yarn: `yarn quality-gc cleanup-scan --root . --dry-run --json`
 3. Analyze the codebase and draft project-specific architecture boundaries before presenting the final plan. Do not leave architecture boundaries empty just because the CLI default is empty.
 4. Present the plan/diff, including the proposed architecture config, and ask for approval before any writes.
 5. After approval, create a dedicated setup branch, run setup with `--apply` through the package-manager runner, install the selected skill, write or update the project-specific architecture config, run local checks, commit, push, and open a PR.
@@ -58,7 +63,7 @@ Communication contract:
   3. `What is not covered or needs a decision` - say when architecture boundaries could not be inferred from code evidence, when no-new-any scans no files, when cleanup only checks tracked artifacts, or when live issue-write cannot be proven before merge.
   4. `What apply will change` - list exact file/workflow/label/config effects. If the effect is only metadata, say so plainly.
   5. `Next step` - one explicit approval sentence, or say no apply is needed if there is nothing useful to write.
-- If package installation is needed, say plainly: `The quality-gc package is not installed in this project yet. I will add it as a dev dependency with <npm|pnpm>, then show the setup preview.`
+- If package installation is needed, say plainly: `The quality-gc package is not installed in this project yet. I will add it as a dev dependency with <npm|pnpm|yarn>, then show the setup preview.`
 - If preview is ready, do not say only "apply". Ask for a user-facing confirmation: `If this plan is acceptable, reply: Approve installing Quality GC.`
 - Mention existing unrelated repository changes only when they affect setup safety. Phrase it as: `I see existing package.json and lockfile changes; I will not overwrite them.`
 - Never ask the user to approve apply without explaining whether it changes guardrail behavior, opens/updates issues, writes workflows, writes labels, or only updates metadata.

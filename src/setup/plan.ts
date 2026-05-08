@@ -56,10 +56,16 @@ function detectPackageManager(root: string): WorkflowPackageManager {
     if (typeof packageJson.packageManager === 'string' && packageJson.packageManager.startsWith('pnpm@')) {
       return 'pnpm';
     }
+    if (typeof packageJson.packageManager === 'string' && packageJson.packageManager.startsWith('yarn@')) {
+      return 'yarn';
+    }
   }
 
   if (fileExists(path.join(root, 'pnpm-lock.yaml'))) {
     return 'pnpm';
+  }
+  if (fileExists(path.join(root, 'yarn.lock'))) {
+    return 'yarn';
   }
 
   return 'npm';
