@@ -7,6 +7,7 @@ import { planManagedTextFile, planOwnedTextFile } from '../files/managed-block.j
 import { planPackageJsonUpdate } from '../files/package-json.js';
 import { createNoNewAnyBaseline } from '../guards/no-new-any.js';
 import { architectureWorkflow, cleanupScanWorkflow, docsContent } from '../workflows/templates.js';
+import type { WorkflowPackageManager } from '../workflows/templates.js';
 
 export interface SetupPlan {
   root: string;
@@ -18,25 +19,46 @@ export function defaultPackageSource(): string {
   return `^${PACKAGE_VERSION}`;
 }
 
+interface PackageJson {
+  packageManager?: unknown;
+}
+
+function detectPackageManager(root: string): WorkflowPackageManager {
+  const packageJsonPath = path.join(root, 'package.json');
+  if (fileExists(packageJsonPath)) {
+    const packageJson = JSON.parse(readText(packageJsonPath)) as PackageJson;
+    if (typeof packageJson.packageManager === 'string' && packageJson.packageManager.startsWith('pnpm@')) {
+      return 'pnpm';
+    }
+  }
+
+  if (fileExists(path.join(root, 'pnpm-lock.yaml'))) {
+    return 'pnpm';
+  }
+
+  return 'npm';
+}
+
 export function createSetupPlan(root: string, options: { packageSource?: string } = {}): SetupPlan {
   const packageSource = options.packageSource ?? defaultPackageSource();
+  const packageManager = detectPackageManager(root);
   const config = defaultConfig();
   const baseline = createNoNewAnyBaseline(root);
   const changes: PlannedTextFile[] = [
     planOwnedTextFile(root, CONFIG_FILE, renderConfig(config), 'create Quality GC source-of-truth config'),
     planOwnedTextFile(root, NO_NEW_ANY_BASELINE_FILE, `${JSON.stringify(baseline, null, 2)}\n`, 'create accepted no-new-any baseline'),
     planPackageJsonUpdate(root, packageSource),
-    planManagedTextFile(root, '.github/workflows/quality-gc-architecture.yml', architectureWorkflow(), {
+    planManagedTextFile(root, '.github/workflows/quality-gc-architecture.yml', architectureWorkflow(packageManager), {
       key: 'workflow:architecture',
       syntax: 'yaml',
       reason: 'install Quality GC architecture workflow',
     }),
-    planManagedTextFile(root, '.github/workflows/quality-gc-cleanup-scan.yml', cleanupScanWorkflow(), {
+    planManagedTextFile(root, '.github/workflows/quality-gc-cleanup-scan.yml', cleanupScanWorkflow(packageManager), {
       key: 'workflow:cleanup-scan',
       syntax: 'yaml',
       reason: 'install Quality GC cleanup scan workflow',
     }),
-    planManagedTextFile(root, 'docs/quality-gc.md', docsContent(), {
+    planManagedTextFile(root, 'docs/quality-gc.md', docsContent(packageManager), {
       key: 'docs:quality-gc',
       syntax: 'markdown',
       reason: 'document installed Quality GC workflow',
@@ -52,6 +74,7 @@ export function createSetupPlan(root: string, options: { packageSource?: string 
 
 export async function createMigrationPlan(root: string, options: { packageSource?: string } = {}): Promise<SetupPlan> {
   const packageSource = options.packageSource ?? defaultPackageSource();
+  const packageManager = detectPackageManager(root);
   const configPath = path.join(root, CONFIG_FILE);
   const configChange: PlannedTextFile = fileExists(configPath)
     ? {
@@ -80,17 +103,17 @@ export async function createMigrationPlan(root: string, options: { packageSource
       configChange,
       baselineChange,
       planPackageJsonUpdate(root, packageSource, { allowDependencyUpdate: true }),
-      planManagedTextFile(root, '.github/workflows/quality-gc-architecture.yml', architectureWorkflow(), {
+      planManagedTextFile(root, '.github/workflows/quality-gc-architecture.yml', architectureWorkflow(packageManager), {
         key: 'workflow:architecture',
         syntax: 'yaml',
         reason: 'update Quality GC architecture workflow',
       }),
-      planManagedTextFile(root, '.github/workflows/quality-gc-cleanup-scan.yml', cleanupScanWorkflow(), {
+      planManagedTextFile(root, '.github/workflows/quality-gc-cleanup-scan.yml', cleanupScanWorkflow(packageManager), {
         key: 'workflow:cleanup-scan',
         syntax: 'yaml',
         reason: 'update Quality GC cleanup scan workflow',
       }),
-      planManagedTextFile(root, 'docs/quality-gc.md', docsContent(), {
+      planManagedTextFile(root, 'docs/quality-gc.md', docsContent(packageManager), {
         key: 'docs:quality-gc',
         syntax: 'markdown',
         reason: 'update installed Quality GC docs',

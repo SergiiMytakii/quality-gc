@@ -34,6 +34,25 @@ function createNpmRepo(): string {
   return root;
 }
 
+function createPnpmRepo(): string {
+  const root = createNpmRepo();
+  writeText(
+    path.join(root, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: 'fixture',
+        version: '1.0.0',
+        type: 'module',
+        packageManager: 'pnpm@10.17.1',
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeText(path.join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+  return root;
+}
+
 async function captureStdout(run: () => Promise<number>): Promise<{ exitCode: number; stdout: string }> {
   const lines: string[] = [];
   const logSpy = vi.spyOn(console, 'log').mockImplementation((message?: unknown, ...optionalParams: unknown[]) => {
@@ -70,6 +89,22 @@ describe('setup and migrate safety', () => {
     expect(written).toContain('.github/workflows/quality-gc-cleanup-scan.yml');
     expect(packageJson.devDependencies['quality-gc']).toBe('github:SergiiMytakii/quality-gc#main');
     expect(packageJson.scripts['quality:gc']).toBe('quality-gc run --root .');
+  });
+
+  it('generates pnpm GitHub workflows for pnpm repositories', () => {
+    const root = createPnpmRepo();
+    const plan = createSetupPlan(root);
+    const architecture = plan.changes.find(change => change.path === '.github/workflows/quality-gc-architecture.yml');
+    const cleanupScan = plan.changes.find(change => change.path === '.github/workflows/quality-gc-cleanup-scan.yml');
+    const docs = plan.changes.find(change => change.path === 'docs/quality-gc.md');
+
+    expect(architecture?.content).toContain('cache: pnpm');
+    expect(architecture?.content).toContain('run: corepack enable');
+    expect(architecture?.content).toContain('run: pnpm install --frozen-lockfile');
+    expect(architecture?.content).toContain('run: pnpm run quality:gc:architecture');
+    expect(architecture?.content).not.toContain('npm ci');
+    expect(cleanupScan?.content).toContain('pnpm run quality:gc:cleanup-scan:write -- --repo "$GITHUB_REPOSITORY"');
+    expect(docs?.content).toContain('detected pnpm');
   });
 
   it('refuses unmanaged generated files', () => {
@@ -246,6 +281,8 @@ describe('workflow and skill installer contracts', () => {
     const workflow = cleanupScanWorkflow();
 
     expect(workflow).toContain('default: true');
+    expect(workflow).toContain('cache: npm');
+    expect(workflow).toContain('run: npm ci');
     expect(workflow).toContain('contents: read');
     expect(workflow).toContain('issues: write');
     expect(workflow).toContain(
