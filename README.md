@@ -108,6 +108,8 @@ The expected flow is:
 7. The agent applies setup, runs checks, commits, pushes, and opens a PR.
 8. After merge, you approve a live Cleanup Scan issue-write proof.
 
+The setup agent should explain progress in user-facing language. A good preview message should say what it checked, what Quality GC will add, what has not been changed yet, and the exact approval phrase to continue. It should not ask users to understand internal details such as package caches, working trees, or raw CLI output.
+
 ## Manual Setup Without An Agent
 
 You can run the same flow directly.

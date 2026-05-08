@@ -33,4 +33,34 @@ Workflow:
 5. Run `quality-gc labels --repo <owner/name>` through the package-manager runner first, then run it with `--apply` after approval to create missing Quality GC labels before live issue write.
 6. Prove live Cleanup Scan issue writes through the installed GitHub Actions workflow with its scoped `GITHUB_TOKEN`; do not use local `gh` as the scheduled issue writer.
 
+Communication contract:
+
+- Speak to the user as an end user, not as an implementer reading logs.
+- Do not expose internal phrasing such as "working tree", "package cache", "runner", "apply not launched", or raw CLI plan dumps unless the user asks for details.
+- Always summarize in this shape:
+  1. `Что я проверил` - one or two user-visible facts.
+  2. `Что будет добавлено` - short plain-language list.
+  3. `Что не изменится без разрешения` - reassure that source files, workflows, labels, and PRs are not changed yet.
+  4. `Следующий шаг` - one explicit approval sentence.
+- If package installation is needed, say plainly: `В этом проекте пакет quality-gc еще не установлен. Я добавлю его как dev-зависимость через <npm|pnpm>, затем покажу план установки.`
+- If preview is ready, do not say only "apply". Ask for a user-facing confirmation: `Если план подходит, напишите: Разрешаю установить Quality GC.`
+- Mention existing unrelated repository changes only when they affect setup safety. Phrase it as: `Я вижу уже существующие изменения в package.json и lockfile; я не буду их перезаписывать.`
+
+Good preview message:
+
+```text
+Проверил проект: это pnpm workspace, GitHub repo найден, секретные файлы не читал.
+
+Quality GC добавит:
+- локальную конфигурацию проверок;
+- команды для запуска guardrails;
+- GitHub Actions для architecture check и weekly cleanup scan;
+- Codex setup skill;
+- GitHub labels для будущих cleanup issues.
+
+Сейчас ничего не применено: файлы, labels, branch и PR еще не созданы.
+
+Если план подходит, напишите: Разрешаю установить Quality GC.
+```
+
 Reject broad cleanup refactors, direct default-branch writes, permanent allowlists for discovered violations, and broad GitHub permissions.
