@@ -241,6 +241,24 @@ The issue body should include a marker like:
 
 Scheduled Cleanup Scans use GitHub Actions `GITHUB_TOKEN` with scoped permissions. Local `gh` credentials are for setup orchestration only.
 
+## Publishing
+
+This repository publishes to npm from GitHub Actions on pushes to `main`.
+
+Required repository secret:
+
+- `NPM_TOKEN` - an npm access token allowed to publish the `quality-gc` package.
+
+Publish behavior:
+
+- CI runs typecheck, tests, audit, and `npm pack --dry-run` first.
+- The publish job reads the package name and version from `package.json`.
+- If `NPM_TOKEN` is not configured, publish is skipped with a workflow warning.
+- If that exact version already exists on npm, publish is skipped.
+- If the version does not exist on npm, GitHub Actions runs `npm publish --access public`.
+
+To release a new package version, bump `package.json` and `package-lock.json`, commit to `main`, and push. Documentation-only or workflow-only pushes with an already-published version will not republish.
+
 ## Commands
 
 - `quality-gc setup` previews generated config, scripts, docs, and workflows. Add `--apply` to write approved changes from a setup branch.
