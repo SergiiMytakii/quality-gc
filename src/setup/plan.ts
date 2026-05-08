@@ -1,7 +1,15 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { fileExists, readText } from '../util/fs.js';
-import { CONFIG_FILE, NO_NEW_ANY_BASELINE_FILE, PACKAGE_VERSION, defaultConfig, renderConfig } from '../config/schema.js';
+import { fileExists, listFiles, readText, relativePosix } from '../util/fs.js';
+import {
+  CONFIG_FILE,
+  DEFAULT_NO_NEW_ANY_INCLUDE,
+  DEFAULT_NO_NEW_ANY_EXCLUDE,
+  NO_NEW_ANY_BASELINE_FILE,
+  PACKAGE_VERSION,
+  defaultConfig,
+  renderConfig,
+} from '../config/schema.js';
 import type { PlannedTextFile } from '../files/managed-block.js';
 import { planManagedTextFile, planOwnedTextFile } from '../files/managed-block.js';
 import { planPackageJsonUpdate } from '../files/package-json.js';
@@ -23,6 +31,23 @@ interface PackageJson {
   packageManager?: unknown;
 }
 
+const LEGACY_SRC_ONLY_NO_NEW_ANY_EXCLUDE = [
+  'src/**/__tests__/**',
+  'src/**/*.spec.ts',
+  'src/**/*.spec.tsx',
+  'src/**/*.test.ts',
+  'src/**/*.test.tsx',
+  'src/**/scripts/**',
+];
+
+function sameStringArray(left: unknown, right: string[]): boolean {
+  return (
+    Array.isArray(left) &&
+    left.length === right.length &&
+    left.every((value, index) => typeof value === 'string' && value === right[index])
+  );
+}
+
 function detectPackageManager(root: string): WorkflowPackageManager {
   const packageJsonPath = path.join(root, 'package.json');
   if (fileExists(packageJsonPath)) {
@@ -39,11 +64,54 @@ function detectPackageManager(root: string): WorkflowPackageManager {
   return 'npm';
 }
 
+function createConfigForRoot(root: string): ReturnType<typeof defaultConfig> {
+  const config = defaultConfig();
+  config.rules.noNewAny.include = detectTypeScriptSourceIncludes(root);
+  return config;
+}
+
+function detectTypeScriptSourceIncludes(root: string): string[] {
+  const ignoredTopLevelDirs = new Set([
+    'build',
+    'coverage',
+    'dist',
+    'generated',
+    'node_modules',
+    'out',
+    'storybook-static',
+  ]);
+  const sourceRoots = new Set<string>();
+  let hasRootSourceFile = false;
+
+  for (const filePath of listFiles(root, { extensions: ['.ts', '.tsx'] })) {
+    const relativePath = relativePosix(root, filePath);
+    const [topLevelDir] = relativePath.split('/');
+    if (!topLevelDir || topLevelDir.startsWith('.') || ignoredTopLevelDirs.has(topLevelDir)) {
+      continue;
+    }
+    if (relativePath === topLevelDir) {
+      hasRootSourceFile = true;
+      continue;
+    }
+    sourceRoots.add(topLevelDir);
+  }
+
+  const includes = [...sourceRoots].sort().map(sourceRoot => `${sourceRoot}/**/*.{ts,tsx}`);
+  if (hasRootSourceFile) {
+    includes.unshift('*.{ts,tsx}');
+  }
+
+  return includes.length > 0 ? includes : [...DEFAULT_NO_NEW_ANY_INCLUDE];
+}
+
 export function createSetupPlan(root: string, options: { packageSource?: string } = {}): SetupPlan {
   const packageSource = options.packageSource ?? defaultPackageSource();
   const packageManager = detectPackageManager(root);
-  const config = defaultConfig();
-  const baseline = createNoNewAnyBaseline(root);
+  const config = createConfigForRoot(root);
+  const baseline = createNoNewAnyBaseline(root, {
+    include: config.rules.noNewAny.include,
+    exclude: config.rules.noNewAny.exclude,
+  });
   const changes: PlannedTextFile[] = [
     planOwnedTextFile(root, CONFIG_FILE, renderConfig(config), 'create Quality GC source-of-truth config'),
     planOwnedTextFile(root, NO_NEW_ANY_BASELINE_FILE, `${JSON.stringify(baseline, null, 2)}\n`, 'create accepted no-new-any baseline'),
@@ -75,18 +143,22 @@ export function createSetupPlan(root: string, options: { packageSource?: string 
 export async function createMigrationPlan(root: string, options: { packageSource?: string } = {}): Promise<SetupPlan> {
   const packageSource = options.packageSource ?? defaultPackageSource();
   const packageManager = detectPackageManager(root);
+  const config = createConfigForRoot(root);
   const configPath = path.join(root, CONFIG_FILE);
   const configChange: PlannedTextFile = fileExists(configPath)
     ? {
         path: CONFIG_FILE,
         action: 'update',
         reason: `update Quality GC installedVersion to ${PACKAGE_VERSION}`,
-        content: await renderMigratedConfig(configPath),
+        content: await renderMigratedConfig(configPath, config),
       }
-    : planOwnedTextFile(root, CONFIG_FILE, renderConfig(defaultConfig()), 'create Quality GC source-of-truth config');
+    : planOwnedTextFile(root, CONFIG_FILE, renderConfig(config), 'create Quality GC source-of-truth config');
 
   const baselinePath = path.join(root, NO_NEW_ANY_BASELINE_FILE);
-  const baseline = createNoNewAnyBaseline(root);
+  const baseline = createNoNewAnyBaseline(root, {
+    include: config.rules.noNewAny.include,
+    exclude: config.rules.noNewAny.exclude,
+  });
   const baselineChange: PlannedTextFile = fileExists(baselinePath)
     ? {
         path: NO_NEW_ANY_BASELINE_FILE,
@@ -122,7 +194,7 @@ export async function createMigrationPlan(root: string, options: { packageSource
   };
 }
 
-async function renderMigratedConfig(configPath: string): Promise<string> {
+async function renderMigratedConfig(configPath: string, inferredConfig: ReturnType<typeof defaultConfig>): Promise<string> {
   const moduleUrl = pathToFileURL(configPath);
   moduleUrl.search = `mtime=${Date.now()}`;
   const loaded = (await import(moduleUrl.href)) as { default?: unknown };
@@ -131,8 +203,23 @@ async function renderMigratedConfig(configPath: string): Promise<string> {
     throw new Error('Cannot migrate Quality GC config without schemaVersion: 1.');
   }
 
+  const migrated = current as ReturnType<typeof defaultConfig>;
+  const noNewAny = migrated.rules.noNewAny;
+  if (
+    sameStringArray(noNewAny.include, DEFAULT_NO_NEW_ANY_INCLUDE) &&
+    !sameStringArray(inferredConfig.rules.noNewAny.include, DEFAULT_NO_NEW_ANY_INCLUDE)
+  ) {
+    noNewAny.include = [...inferredConfig.rules.noNewAny.include];
+  }
+  if (
+    sameStringArray(noNewAny.exclude, LEGACY_SRC_ONLY_NO_NEW_ANY_EXCLUDE) ||
+    sameStringArray(noNewAny.exclude, DEFAULT_NO_NEW_ANY_EXCLUDE)
+  ) {
+    noNewAny.exclude = [...inferredConfig.rules.noNewAny.exclude];
+  }
+
   return renderConfig({
-    ...(current as ReturnType<typeof defaultConfig>),
+    ...migrated,
     installedVersion: PACKAGE_VERSION,
   });
 }

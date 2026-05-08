@@ -35,6 +35,18 @@ function createNpmRepo(): string {
   return root;
 }
 
+function createNpmRepoWithoutSource(): string {
+  const root = tempDir('quality-gc-fixture-');
+  writeText(
+    path.join(root, 'package.json'),
+    `${JSON.stringify({ name: 'fixture', version: '1.0.0', type: 'module' }, null, 2)}\n`,
+  );
+  requireSuccessfulCommand('git', ['init'], { cwd: root });
+  requireSuccessfulCommand('git', ['config', 'user.email', 'quality-gc@example.com'], { cwd: root });
+  requireSuccessfulCommand('git', ['config', 'user.name', 'Quality GC'], { cwd: root });
+  return root;
+}
+
 function createPnpmRepo(): string {
   const root = createNpmRepo();
   writeText(
@@ -163,6 +175,23 @@ describe('setup and migrate safety', () => {
     expect(docs?.content).toContain('detected pnpm');
   });
 
+  it('detects TypeScript source roots for repositories without root src', () => {
+    const root = createNpmRepoWithoutSource();
+    writeText(path.join(root, 'apps/web/src/index.ts'), 'export const value: any = "covered";\n');
+    writeText(path.join(root, 'packages/core/src/index.ts'), 'export const value: string = "covered";\n');
+
+    const plan = createSetupPlan(root);
+    const configChange = plan.changes.find(change => change.path === '.quality-gc/quality-gc.config.mjs');
+    const baselineChange = plan.changes.find(change => change.path === '.quality-gc/no-new-any-baseline.json');
+    const configText = configChange?.content ?? '';
+    const baseline = JSON.parse(baselineChange?.content ?? '{}') as { files: Record<string, number> };
+
+    expect(configText).toContain('"apps/**/*.{ts,tsx}"');
+    expect(configText).toContain('"packages/**/*.{ts,tsx}"');
+    expect(configText).not.toContain('"src/**/*.{ts,tsx}"');
+    expect(baseline.files).toEqual({ 'apps/web/src/index.ts': 1 });
+  });
+
   it('refuses unmanaged generated files', () => {
     const root = createNpmRepo();
     writeText(path.join(root, 'docs/quality-gc.md'), '# local docs\n');
@@ -192,6 +221,35 @@ describe('setup and migrate safety', () => {
 
     expect(packageJson.devDependencies['quality-gc']).toBe(`^${PACKAGE_VERSION}`);
     expect(configText).toContain(`"installedVersion": "${PACKAGE_VERSION}"`);
+  });
+
+  it('routes setup through migration and updates legacy src-only no-new-any config', async () => {
+    const root = createNpmRepoWithoutSource();
+    writeText(path.join(root, 'apps/web/src/index.ts'), 'export const value: any = "covered";\n');
+    writeText(path.join(root, 'packages/core/src/index.ts'), 'export const value: string = "covered";\n');
+    const legacyConfig = defaultConfig('0.1.2');
+    legacyConfig.rules.noNewAny.include = ['src/**/*.{ts,tsx}'];
+    legacyConfig.rules.noNewAny.exclude = [
+      'src/**/__tests__/**',
+      'src/**/*.spec.ts',
+      'src/**/*.spec.tsx',
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/scripts/**',
+    ];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(legacyConfig));
+
+    const result = await captureStdout(() => main(['setup', '--root', root, '--json']));
+    const payload = JSON.parse(result.stdout) as { plan: { changes: Array<{ path: string; content: string }> } };
+    const configChange = payload.plan.changes.find(change => change.path === '.quality-gc/quality-gc.config.mjs');
+    const baselineChange = payload.plan.changes.find(change => change.path === '.quality-gc/no-new-any-baseline.json');
+    const baseline = JSON.parse(baselineChange?.content ?? '{}') as { files: Record<string, number> };
+
+    expect(result.exitCode).toBe(0);
+    expect(configChange?.content).toContain('"apps/**/*.{ts,tsx}"');
+    expect(configChange?.content).toContain('"packages/**/*.{ts,tsx}"');
+    expect(configChange?.content).not.toContain('"src/**/*.{ts,tsx}"');
+    expect(baseline.files).toEqual({ 'apps/web/src/index.ts': 1 });
   });
 });
 

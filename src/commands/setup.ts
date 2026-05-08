@@ -1,6 +1,10 @@
+import path from 'node:path';
 import { createSetupPlan, summarizePlan } from '../setup/plan.js';
 import { applySetupPlan } from '../setup/apply.js';
 import { assertNotDefaultBranch } from '../git/default-branch.js';
+import { CONFIG_FILE } from '../config/schema.js';
+import { fileExists } from '../util/fs.js';
+import { runMigrateCommand } from './migrate.js';
 
 export interface SetupCommandOptions {
   root: string;
@@ -11,6 +15,10 @@ export interface SetupCommandOptions {
 }
 
 export async function runSetupCommand(options: SetupCommandOptions): Promise<number> {
+  if (fileExists(path.join(options.root, CONFIG_FILE))) {
+    return runMigrateCommand(options);
+  }
+
   const plan = createSetupPlan(options.root, { packageSource: options.packageSource });
 
   if (options.json) {

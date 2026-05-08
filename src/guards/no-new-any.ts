@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { listFiles, readJson, readText, relativePosix, writeJson } from '../util/fs.js';
 import type { Violation } from '../util/result.js';
+import { DEFAULT_NO_NEW_ANY_INCLUDE } from '../config/schema.js';
 import type { QualityGcConfig } from '../config/schema.js';
 
 export interface NoNewAnyBaseline {
@@ -60,7 +61,7 @@ export function collectAnyCounts(
   options: { include?: string[]; exclude?: string[] } = {},
 ): Record<string, number> {
   const counts: Record<string, number> = {};
-  const include = options.include ?? ['src/**/*.{ts,tsx}'];
+  const include = options.include ?? DEFAULT_NO_NEW_ANY_INCLUDE;
   const exclude = options.exclude ?? [];
 
   for (const filePath of listFiles(root, { extensions: ['.ts', '.tsx'] })) {
@@ -77,11 +78,14 @@ export function collectAnyCounts(
   return counts;
 }
 
-export function createNoNewAnyBaseline(root: string): NoNewAnyBaseline {
+export function createNoNewAnyBaseline(
+  root: string,
+  options: { include?: string[]; exclude?: string[] } = {},
+): NoNewAnyBaseline {
   return {
     schemaVersion: 1,
     description: 'Accepted explicit TypeScript any baseline for the Quality GC no-new-any ratchet.',
-    files: collectAnyCounts(root),
+    files: collectAnyCounts(root, options),
   };
 }
 

@@ -7,6 +7,15 @@ const packageJson = JSON.parse(fs.readFileSync(new URL('../../package.json', imp
 export const PACKAGE_VERSION = packageJson.version;
 export const CONFIG_FILE = '.quality-gc/quality-gc.config.mjs';
 export const NO_NEW_ANY_BASELINE_FILE = '.quality-gc/no-new-any-baseline.json';
+export const DEFAULT_NO_NEW_ANY_INCLUDE = ['src/**/*.{ts,tsx}'];
+export const DEFAULT_NO_NEW_ANY_EXCLUDE = [
+  '**/__tests__/**',
+  '**/*.spec.ts',
+  '**/*.spec.tsx',
+  '**/*.test.ts',
+  '**/*.test.tsx',
+  '**/scripts/**',
+];
 
 export type RuleStatus = 'blocking' | 'candidate' | 'disabled';
 
@@ -61,15 +70,8 @@ export function defaultConfig(installedVersion = PACKAGE_VERSION): QualityGcConf
       noNewAny: {
         status: 'blocking',
         baselineFile: NO_NEW_ANY_BASELINE_FILE,
-        include: ['src/**/*.{ts,tsx}'],
-        exclude: [
-          'src/**/__tests__/**',
-          'src/**/*.spec.ts',
-          'src/**/*.spec.tsx',
-          'src/**/*.test.ts',
-          'src/**/*.test.tsx',
-          'src/**/scripts/**',
-        ],
+        include: [...DEFAULT_NO_NEW_ANY_INCLUDE],
+        exclude: [...DEFAULT_NO_NEW_ANY_EXCLUDE],
       },
       staleLivePath: {
         status: 'candidate',
