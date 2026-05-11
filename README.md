@@ -223,6 +223,23 @@ The weekly cleanup scan can also create a GitHub Issue for architecture config d
 
 Technical rule format is documented in [`docs/architecture-boundaries.md`](docs/architecture-boundaries.md).
 
+## Stale Live Paths
+
+`rules.staleLivePath.retiredPaths` catches active files that still reference removed source paths. By default it scans common code, workflow, config, and markdown files. Use `includePaths` and `excludePaths` when a repo keeps historical docs, generated workspaces, or fixtures that should not count as active references.
+
+Example:
+
+```js
+rules: {
+  staleLivePath: {
+    status: 'blocking',
+    retiredPaths: ['src/old-service'],
+    includePaths: ['.github/workflows', 'scripts', 'docs'],
+    excludePaths: ['docs/plans', 'docs/implementation-specs', 'scripts/__fixtures__'],
+  },
+}
+```
+
 ## Cleanup Scan Issues
 
 Cleanup Scan can create or update GitHub Issues for non-blocking cleanup work.

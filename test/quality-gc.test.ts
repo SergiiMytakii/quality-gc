@@ -14,6 +14,7 @@ import { planLabelActions } from '../src/github/labels.js';
 import { createMigrationPlan, createSetupPlan } from '../src/setup/plan.js';
 import { applySetupPlan } from '../src/setup/apply.js';
 import { writeNoNewAnyBaseline, evaluateNoNewAny, countExplicitAny } from '../src/guards/no-new-any.js';
+import { evaluateStaleLivePaths } from '../src/guards/stale-live-path.js';
 import { cleanupScanWorkflow } from '../src/workflows/templates.js';
 import {
   createSkillInstallPlan,
@@ -771,6 +772,34 @@ describe('guardrail adoption model', () => {
     const findings = await collectCleanupFindings(root);
 
     expect(findings.some(finding => finding.key === 'promote-stale-live-path')).toBe(false);
+  });
+
+  it('limits stale live path checks to configured include and exclude paths', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.noNewAny.status = 'disabled';
+    config.rules.staleLivePath.status = 'blocking';
+    config.rules.staleLivePath.retiredPaths = ['src/old-live-path'];
+    config.rules.staleLivePath.includePaths = ['docs', 'scripts'];
+    config.rules.staleLivePath.excludePaths = ['docs/archive', 'scripts/__fixtures__'];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+    writeText(path.join(root, 'docs/current.md'), 'Use src/old-live-path here.\n');
+    writeText(path.join(root, 'docs/archive/old.md'), 'Historical src/old-live-path note.\n');
+    writeText(path.join(root, 'scripts/__fixtures__/old.md'), 'Fixture src/old-live-path note.\n');
+    writeText(path.join(root, '.codex-orchestrator/workspaces/issue/docs/current.md'), 'Generated src/old-live-path note.\n');
+
+    const violations = evaluateStaleLivePaths(root, config);
+    const exitCode = await runGuardrailsCommand({ root, json: true });
+
+    expect(violations).toEqual([
+      {
+        rule: 'stale-live-path',
+        path: 'docs/current.md',
+        line: 1,
+        detail: 'active file references retired path src/old-live-path',
+      },
+    ]);
+    expect(exitCode).toBe(1);
   });
 
   it('creates architecture drift findings for uncovered source modules', async () => {

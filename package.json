@@ -1,6 +1,6 @@
 {
   "name": "quality-gc",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Deterministic Quality GC guardrails and setup-agent installers for JavaScript and TypeScript repositories.",
   "license": "MIT",
   "type": "module",

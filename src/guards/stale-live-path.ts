@@ -10,8 +10,25 @@ function isSecretLike(relativePath: string): boolean {
   return name.startsWith('.env') || name.includes('secret') || name.includes('credential') || name.includes('token');
 }
 
+function normalizePathFilter(filterPath: string): string {
+  return filterPath.replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+function isInsidePathFilter(relativePath: string, filterPath: string): boolean {
+  const normalizedFilter = normalizePathFilter(filterPath);
+  return relativePath === normalizedFilter || relativePath.startsWith(`${normalizedFilter}/`);
+}
+
+function shouldScanPath(relativePath: string, includePaths: string[] = [], excludePaths: string[] = []): boolean {
+  if (includePaths.length > 0 && !includePaths.some(filterPath => isInsidePathFilter(relativePath, filterPath))) {
+    return false;
+  }
+
+  return !excludePaths.some(filterPath => isInsidePathFilter(relativePath, filterPath));
+}
+
 export function evaluateStaleLivePaths(root: string, config: QualityGcConfig): Violation[] {
-  const retiredPaths = config.rules.staleLivePath.retiredPaths;
+  const { retiredPaths, includePaths, excludePaths } = config.rules.staleLivePath;
   if (retiredPaths.length === 0) {
     return [];
   }
@@ -19,7 +36,11 @@ export function evaluateStaleLivePaths(root: string, config: QualityGcConfig): V
   const violations: Violation[] = [];
   for (const filePath of listFiles(root, { extensions: ACTIVE_EXTENSIONS, includeHidden: true })) {
     const relativePath = relativePosix(root, filePath);
-    if (relativePath.startsWith('.quality-gc/') || isSecretLike(relativePath)) {
+    if (
+      relativePath.startsWith('.quality-gc/') ||
+      isSecretLike(relativePath) ||
+      !shouldScanPath(relativePath, includePaths, excludePaths)
+    ) {
       continue;
     }
 

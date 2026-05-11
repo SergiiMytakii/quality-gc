@@ -108,6 +108,8 @@ export interface QualityGcConfig {
     staleLivePath: {
       status: RuleStatus;
       retiredPaths: string[];
+      includePaths?: string[];
+      excludePaths?: string[];
     };
   };
   cleanupScan: {

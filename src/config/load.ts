@@ -95,6 +95,13 @@ function validateCleanupScanConfig(config: Partial<QualityGcConfig>): void {
   requireOptionalStringArray(cleanupScan.reviewedLocalArtifactPaths, 'cleanupScan.reviewedLocalArtifactPaths');
 }
 
+function validateStaleLivePathConfig(config: Partial<QualityGcConfig>): void {
+  const staleLivePath = requireObject(config.rules?.staleLivePath, 'rules.staleLivePath');
+  requireStringArray(staleLivePath.retiredPaths, 'rules.staleLivePath.retiredPaths', { allowEmpty: true });
+  requireOptionalStringArray(staleLivePath.includePaths, 'rules.staleLivePath.includePaths');
+  requireOptionalStringArray(staleLivePath.excludePaths, 'rules.staleLivePath.excludePaths');
+}
+
 function validateServiceRoots(value: unknown): void {
   if (value === undefined) {
     return;
@@ -271,6 +278,7 @@ export function validateConfig(value: unknown): QualityGcConfig {
   }
 
   validateArchitectureConfig(config);
+  validateStaleLivePathConfig(config);
   validateCleanupScanConfig(config);
 
   return config as QualityGcConfig;
