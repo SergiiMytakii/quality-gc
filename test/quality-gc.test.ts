@@ -825,6 +825,30 @@ describe('guardrail adoption model', () => {
     expect(findings.some(finding => finding.key === 'architecture-config-drift')).toBe(false);
   });
 
+  it('does not create tracked artifact findings for reviewed local artifact paths', async () => {
+    const root = createNpmRepo();
+    const config = defaultConfig();
+    config.rules.architecture.status = 'disabled';
+    config.rules.noNewAny.status = 'disabled';
+    config.rules.staleLivePath.status = 'disabled';
+    config.cleanupScan.reviewedLocalArtifactPaths = ['tmp/watchdog/telegram-credentials.json'];
+    writeText(path.join(root, '.quality-gc/quality-gc.config.mjs'), renderConfig(config));
+    writeText(path.join(root, 'tmp/watchdog/telegram-credentials.json'), 'TOKEN=super-secret\n');
+    writeText(path.join(root, 'tmp/watchdog/other-token.json'), 'TOKEN=also-secret\n');
+    requireSuccessfulCommand('git', ['add', 'tmp/watchdog/telegram-credentials.json', 'tmp/watchdog/other-token.json'], {
+      cwd: root,
+    });
+
+    const findings = await collectCleanupFindings(root);
+    const evidencePaths = findings.flatMap(finding => finding.evidence.map(evidence => evidence.path));
+    const body = JSON.stringify(findings);
+
+    expect(evidencePaths).not.toContain('tmp/watchdog/telegram-credentials.json');
+    expect(evidencePaths).toContain('tmp/watchdog/other-token.json');
+    expect(body).not.toContain('super-secret');
+    expect(body).not.toContain('also-secret');
+  });
+
   it('runs architecture drift command as advisory by default', async () => {
     const root = createNpmRepo();
     const config = defaultConfig();
@@ -890,6 +914,13 @@ describe('cleanup issue lifecycle', () => {
       'quality-gc:tracked-artifact',
       'quality-gc:promotion',
     ]);
+  });
+
+  it('validates reviewed local artifact paths as strings', () => {
+    const config = defaultConfig();
+    config.cleanupScan.reviewedLocalArtifactPaths = [123 as unknown as string];
+
+    expect(() => validateConfig(config)).toThrow(/cleanupScan\.reviewedLocalArtifactPaths\[0\]/);
   });
 
   it('uses path-level evidence for credential-shaped tracked artifacts', async () => {

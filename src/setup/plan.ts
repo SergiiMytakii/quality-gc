@@ -224,6 +224,7 @@ async function loadConfigForMigration(configPath: string): Promise<QualityGcConf
 
 function migrateConfig(current: QualityGcConfig, inferredConfig: ReturnType<typeof defaultConfig>): QualityGcConfig {
   const migrated = structuredClone(current);
+  migrated.cleanupScan.reviewedLocalArtifactPaths ??= [];
   const noNewAny = migrated.rules.noNewAny;
   if (
     sameStringArray(noNewAny.include, DEFAULT_NO_NEW_ANY_INCLUDE) &&

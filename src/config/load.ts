@@ -88,6 +88,13 @@ function validateArchitectureConfig(config: Partial<QualityGcConfig>): void {
   validateSyntaxBoundaries(architecture.syntaxBoundaries);
 }
 
+function validateCleanupScanConfig(config: Partial<QualityGcConfig>): void {
+  const cleanupScan = requireObject(config.cleanupScan, 'cleanupScan');
+  requireStringArray(cleanupScan.labels, 'cleanupScan.labels');
+  requireStringArray(cleanupScan.trackedLocalArtifactRoots, 'cleanupScan.trackedLocalArtifactRoots');
+  requireOptionalStringArray(cleanupScan.reviewedLocalArtifactPaths, 'cleanupScan.reviewedLocalArtifactPaths');
+}
+
 function validateServiceRoots(value: unknown): void {
   if (value === undefined) {
     return;
@@ -264,6 +271,7 @@ export function validateConfig(value: unknown): QualityGcConfig {
   }
 
   validateArchitectureConfig(config);
+  validateCleanupScanConfig(config);
 
   return config as QualityGcConfig;
 }

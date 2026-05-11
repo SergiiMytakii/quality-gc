@@ -227,6 +227,12 @@ Technical rule format is documented in [`docs/architecture-boundaries.md`](docs/
 
 Cleanup Scan can create or update GitHub Issues for non-blocking cleanup work.
 
+Tracked local artifact findings can be reviewed and accepted per project without
+patching generated scripts. Add exact repository-relative paths to
+`cleanupScan.reviewedLocalArtifactPaths` in `.quality-gc/quality-gc.config.mjs`.
+Those paths are skipped by future Cleanup Scans, while other tracked artifacts
+under the same root still report normally.
+
 Create labels before the first live issue write:
 
 ```sh

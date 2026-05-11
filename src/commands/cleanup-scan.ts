@@ -30,7 +30,11 @@ export async function collectCleanupFindings(root: string): Promise<CleanupFindi
   return [
     ...collectArchitectureDriftFindings(root, config),
     ...candidateFindings(ruleResults),
-    ...listTrackedLocalArtifactFindings(root, config.cleanupScan.trackedLocalArtifactRoots),
+    ...listTrackedLocalArtifactFindings(
+      root,
+      config.cleanupScan.trackedLocalArtifactRoots,
+      config.cleanupScan.reviewedLocalArtifactPaths ?? [],
+    ),
   ];
 }
 

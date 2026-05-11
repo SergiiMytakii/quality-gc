@@ -113,6 +113,7 @@ export interface QualityGcConfig {
   cleanupScan: {
     labels: string[];
     trackedLocalArtifactRoots: string[];
+    reviewedLocalArtifactPaths: string[];
   };
 }
 
@@ -148,6 +149,7 @@ export function defaultConfig(installedVersion = PACKAGE_VERSION): QualityGcConf
     cleanupScan: {
       labels: [...QUALITY_GC_LABELS],
       trackedLocalArtifactRoots: ['.tmp', 'tmp', 'logs', 'output'],
+      reviewedLocalArtifactPaths: [],
     },
   };
 }
